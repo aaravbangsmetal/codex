@@ -580,6 +580,12 @@ enum RateLimitErrorKind {
     Generic,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ShellEscapePolicy {
+    Allow,
+    Disallow,
+}
+
 #[cfg(test)]
 fn core_rate_limit_error_kind(info: &CoreCodexErrorInfo) -> Option<RateLimitErrorKind> {
     match info {
@@ -801,7 +807,9 @@ pub(crate) struct ChatWidget {
     suppress_queue_autosend: bool,
     thread_id: Option<ThreadId>,
     thread_name: Option<String>,
+    thread_rename_block_message: Option<String>,
     forked_from: Option<ThreadId>,
+    next_fork_banner_parent_label: Option<String>,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
@@ -1870,7 +1878,7 @@ impl ChatWidget {
         self.on_session_configured(thread_session_state_to_legacy_event(session));
     }
 
-    fn emit_forked_thread_event(&self, forked_from_id: ThreadId) {
+    fn emit_forked_thread_event_with_lookup(&self, forked_from_id: ThreadId) {
         let app_event_tx = self.app_event_tx.clone();
         let codex_home = self.config.codex_home.clone();
         tokio::spawn(async move {
@@ -1902,9 +1910,7 @@ impl ChatWidget {
             };
 
             match find_thread_name_by_id(&codex_home, &forked_from_id).await {
-                Ok(Some(name)) if !name.trim().is_empty() => {
-                    send_name_and_id(name);
-                }
+                Ok(Some(name)) if !name.trim().is_empty() => send_name_and_id(name),
                 Ok(_) => send_id_only(),
                 Err(err) => {
                     tracing::warn!("Failed to read forked thread name: {err}");
@@ -1914,6 +1920,76 @@ impl ChatWidget {
         });
     }
 
+    fn emit_forked_thread_event(&mut self, forked_from_id: ThreadId) {
+        let Some(label) = self.next_fork_banner_parent_label.take() else {
+            self.emit_forked_thread_event_with_lookup(forked_from_id);
+            return;
+        };
+
+        let line: Line<'static> = vec![
+            "• ".dim(),
+            "Thread forked from ".into(),
+            label.cyan(),
+            " (".into(),
+            forked_from_id.to_string().cyan(),
+            ")".into(),
+        ]
+        .into();
+        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+            PlainHistoryCell::new(vec![line]),
+        )));
+    }
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     fn on_thread_name_updated(&mut self, event: codex_protocol::protocol::ThreadNameUpdatedEvent) {
         if self.thread_id == Some(event.thread_id) {
             self.thread_name = event.thread_name;
@@ -4330,7 +4406,9 @@ impl ChatWidget {
             suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
+            thread_rename_block_message: None,
             forked_from: None,
+            next_fork_banner_parent_label: None,
             queued_user_messages: VecDeque::new(),
             rejected_steers_queue: VecDeque::new(),
             pending_steers: VecDeque::new(),
@@ -4617,6 +4695,22 @@ impl ChatWidget {
 
     pub(crate) fn set_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
         self.bottom_pane.set_footer_hint_override(items);
+    }
+
+    pub(crate) fn set_thread_footer_hint_override(&mut self, items: Option<Vec<(String, String)>>) {
+        self.bottom_pane.set_thread_footer_hint_override(items);
+    }
+
+    pub(crate) fn clear_thread_rename_block(&mut self) {
+        self.thread_rename_block_message = None;
+    }
+
+    pub(crate) fn set_thread_rename_block_message(&mut self, message: impl Into<String>) {
+        self.thread_rename_block_message = Some(message.into());
+    }
+
+    pub(crate) fn set_next_fork_banner_parent_label(&mut self, label: Option<String>) {
+        self.next_fork_banner_parent_label = label;
     }
 
     pub(crate) fn show_selection_view(&mut self, params: SelectionViewParams) {
@@ -4932,6 +5026,9 @@ impl ChatWidget {
             SlashCommand::Plugins => {
                 self.add_plugins_output();
             }
+            SlashCommand::Btw => {
+                self.add_error_message("Usage: /btw <question>".to_string());
+            }
             SlashCommand::Rollout => {
                 if let Some(path) = self.rollout_path() {
                     self.add_info_message(
@@ -5027,6 +5124,9 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Rename if !trimmed.is_empty() => {
+                if !self.ensure_thread_rename_allowed() {
+                    return;
+                }
                 self.session_telemetry
                     .counter("codex.thread.rename", /*inc*/ 1, &[]);
                 let Some((prepared_args, _prepared_elements)) = self
@@ -5050,22 +5150,8 @@ impl ChatWidget {
                 if self.active_mode_kind() != ModeKind::Plan {
                     return;
                 }
-                let Some((prepared_args, prepared_elements)) = self
-                    .bottom_pane
-                    .prepare_inline_args_submission(/*record_history*/ true)
-                else {
+                let Some(user_message) = self.prepare_inline_submission_user_message() else {
                     return;
-                };
-                let local_images = self
-                    .bottom_pane
-                    .take_recent_submission_images_with_placeholders();
-                let remote_image_urls = self.take_remote_image_urls();
-                let user_message = UserMessage {
-                    text: prepared_args,
-                    local_images,
-                    remote_image_urls,
-                    text_elements: prepared_elements,
-                    mention_bindings: self.bottom_pane.take_recent_submission_mention_bindings(),
                 };
                 if self.is_session_configured() {
                     self.reasoning_buffer.clear();
@@ -5075,6 +5161,21 @@ impl ChatWidget {
                 } else {
                     self.queue_user_message(user_message);
                 }
+            }
+            SlashCommand::Btw if !trimmed.is_empty() => {
+                let Some(parent_thread_id) = self.thread_id else {
+                    self.add_error_message(
+                        "BTW is unavailable before the session starts.".to_string(),
+                    );
+                    return;
+                };
+                let Some(user_message) = self.prepare_inline_submission_user_message() else {
+                    return;
+                };
+                self.app_event_tx.send(AppEvent::StartBtw {
+                    parent_thread_id,
+                    user_message,
+                });
             }
             SlashCommand::Review if !trimmed.is_empty() => {
                 let Some((prepared_args, _prepared_elements)) = self
@@ -5109,6 +5210,9 @@ impl ChatWidget {
     }
 
     fn show_rename_prompt(&mut self) {
+        if !self.ensure_thread_rename_allowed() {
+            return;
+        }
         let tx = self.app_event_tx.clone();
         let has_name = self
             .thread_name
@@ -5138,6 +5242,32 @@ impl ChatWidget {
         );
 
         self.bottom_pane.show_view(Box::new(view));
+    }
+
+    fn ensure_thread_rename_allowed(&mut self) -> bool {
+        match self.thread_rename_block_message.clone() {
+            Some(message) => {
+                self.add_error_message(message);
+                false
+            }
+            None => true,
+        }
+    }
+
+    fn prepare_inline_submission_user_message(&mut self) -> Option<UserMessage> {
+        let (text, text_elements) = self.bottom_pane.prepare_inline_args_submission(true)?;
+        let local_images = self
+            .bottom_pane
+            .take_recent_submission_images_with_placeholders();
+        let remote_image_urls = self.take_remote_image_urls();
+        let mention_bindings = self.bottom_pane.take_recent_submission_mention_bindings();
+        Some(UserMessage {
+            text,
+            local_images,
+            remote_image_urls,
+            text_elements,
+            mention_bindings,
+        })
     }
 
     pub(crate) fn handle_paste(&mut self, text: String) {
@@ -5200,11 +5330,27 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
+        let _ = self
+            .submit_user_message_with_shell_escape_policy(user_message, ShellEscapePolicy::Allow);
+    }
+
+    pub(crate) fn submit_user_message_as_plain_user_turn(
+        &mut self,
+        user_message: UserMessage,
+    ) -> Option<AppCommand> {
+        self.submit_user_message_with_shell_escape_policy(user_message, ShellEscapePolicy::Disallow)
+    }
+
+    fn submit_user_message_with_shell_escape_policy(
+        &mut self,
+        user_message: UserMessage,
+        shell_escape_policy: ShellEscapePolicy,
+    ) -> Option<AppCommand> {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
             self.queued_user_messages.push_front(user_message);
             self.refresh_pending_input_preview();
-            return;
+            return None;
         }
         let UserMessage {
             text,
@@ -5214,7 +5360,7 @@ impl ChatWidget {
             mention_bindings,
         } = user_message;
         if text.is_empty() && local_images.is_empty() && remote_image_urls.is_empty() {
-            return;
+            return None;
         }
         if (!local_images.is_empty() || !remote_image_urls.is_empty())
             && !self.current_model_supports_images()
@@ -5226,14 +5372,16 @@ impl ChatWidget {
                 mention_bindings,
                 remote_image_urls,
             );
-            return;
+            return None;
         }
 
         let render_in_history = !self.agent_turn_running;
         let mut items: Vec<UserInput> = Vec::new();
 
         // Special-case: "!cmd" executes a local shell command instead of sending to the model.
-        if let Some(stripped) = text.strip_prefix('!') {
+        if shell_escape_policy == ShellEscapePolicy::Allow
+            && let Some(stripped) = text.strip_prefix('!')
+        {
             let cmd = stripped.trim();
             if cmd.is_empty() {
                 self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
@@ -5242,7 +5390,7 @@ impl ChatWidget {
                         Some(USER_SHELL_COMMAND_HELP_HINT.to_string()),
                     ),
                 )));
-                return;
+                return None;
             }
             self.submit_op(AppCommand::run_user_shell_command(cmd.to_string()));
             return;
@@ -5417,8 +5565,9 @@ impl ChatWidget {
             personality,
         );
 
+        let submitted_command = op.clone();
         if !self.submit_op(op) {
-            return;
+            return None;
         }
 
         // Persist the text to cross-session message history. Mentions are
@@ -5478,6 +5627,7 @@ impl ChatWidget {
         }
 
         self.needs_final_message_separator = false;
+        Some(submitted_command)
     }
 
     /// Restore the blocked submission draft without losing mention resolution state.
