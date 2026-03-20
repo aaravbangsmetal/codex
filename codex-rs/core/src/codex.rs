@@ -4542,7 +4542,6 @@ mod handlers {
     }
 
     pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
-        let is_user_turn = matches!(&op, Op::UserTurn { .. });
         let (items, updates) = match op {
             Op::UserTurn {
                 cwd,
@@ -4601,7 +4600,7 @@ mod handlers {
             // new_turn_with_sub_id already emits the error event.
             return;
         };
-        if is_user_turn && routes_approval_to_guardian(current_context.as_ref()) {
+        if routes_approval_to_guardian(current_context.as_ref()) {
             sess.guardian_review_session
                 .spawn_initialize_trunk_if_needed(Arc::clone(sess), Arc::clone(&current_context));
         }
