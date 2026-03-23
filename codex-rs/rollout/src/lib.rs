@@ -13,7 +13,6 @@ pub mod policy;
 pub mod recorder;
 pub mod session_index;
 
-mod git_info;
 mod path_utils;
 mod truncate;
 
