@@ -508,12 +508,7 @@ async fn multi_agent_v2_send_input_accepts_structured_items() {
         .find(|(id, op)| *id == agent_id && *op == expected);
     assert_eq!(captured, Some((agent_id, expected)));
 
-    let history_timeout = if cfg!(target_os = "macos") {
-        Duration::from_secs(5)
-    } else {
-        Duration::from_secs(2)
-    };
-    timeout(history_timeout, async {
+    timeout(Duration::from_secs(2), async {
         loop {
             let history_items = thread
                 .codex
