@@ -266,6 +266,10 @@ impl GuardianReviewSessionManager {
         parent_session: Arc<Session>,
         parent_turn: Arc<TurnContext>,
     ) {
+        if !self.prepare_trunk_for_eager_init().await {
+            return;
+        }
+
         let resolved =
             match resolve_guardian_review_config(parent_session.as_ref(), parent_turn.as_ref())
                 .await
