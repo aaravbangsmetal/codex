@@ -1,3 +1,9 @@
+mod truncate;
+
+pub use truncate::MiddleTruncation;
+pub use truncate::truncate_middle_chars;
+pub use truncate::truncate_middle_with_byte_budget;
+
 // Truncate a &str to a byte budget at a char boundary (prefix)
 #[inline]
 pub fn take_bytes_at_char_boundary(s: &str, maxb: usize) -> &str {

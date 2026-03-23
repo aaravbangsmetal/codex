@@ -2,47 +2,11 @@ use super::TruncationPolicy;
 use super::approx_token_count;
 use super::formatted_truncate_text;
 use super::formatted_truncate_text_content_items_with_policy;
-use super::split_string;
 use super::truncate_function_output_items_with_policy;
 use super::truncate_text;
 use super::truncate_with_token_budget;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use pretty_assertions::assert_eq;
-
-#[test]
-fn split_string_works() {
-    assert_eq!(split_string("hello world", 5, 5), (1, "hello", "world"));
-    assert_eq!(split_string("abc", 0, 0), (3, "", ""));
-}
-
-#[test]
-fn split_string_handles_empty_string() {
-    assert_eq!(split_string("", 4, 4), (0, "", ""));
-}
-
-#[test]
-fn split_string_only_keeps_prefix_when_tail_budget_is_zero() {
-    assert_eq!(split_string("abcdef", 3, 0), (3, "abc", ""));
-}
-
-#[test]
-fn split_string_only_keeps_suffix_when_prefix_budget_is_zero() {
-    assert_eq!(split_string("abcdef", 0, 3), (3, "", "def"));
-}
-
-#[test]
-fn split_string_handles_overlapping_budgets_without_removal() {
-    assert_eq!(split_string("abcdef", 4, 4), (0, "abcd", "ef"));
-}
-
-#[test]
-fn split_string_respects_utf8_boundaries() {
-    assert_eq!(split_string("😀abc😀", 5, 5), (1, "😀a", "c😀"));
-
-    assert_eq!(split_string("😀😀😀😀😀", 1, 1), (5, "", ""));
-    assert_eq!(split_string("😀😀😀😀😀", 7, 7), (3, "😀", "😀"));
-    assert_eq!(split_string("😀😀😀😀😀", 8, 8), (1, "😀😀", "😀😀"));
-}
 
 #[test]
 fn truncate_bytes_less_than_placeholder_returns_placeholder() {
