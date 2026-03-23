@@ -172,6 +172,8 @@ pub enum Feature {
     FastMode,
     /// Enable voice transcription in the TUI composer.
     VoiceTranscription,
+    /// Enable background screen recording support in app-server.
+    ScreenRecording,
     /// Enable experimental realtime voice conversation mode in the TUI.
     RealtimeConversation,
     /// Route interactive startup to the app-server-backed TUI implementation.
@@ -806,6 +808,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::VoiceTranscription,
         key: "voice_transcription",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ScreenRecording,
+        key: "screen_recording",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

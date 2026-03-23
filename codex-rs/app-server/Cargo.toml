@@ -52,6 +52,7 @@ codex-utils-json-to-toml = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 futures = { workspace = true }
+image = { workspace = true, features = ["jpeg"] }
 owo-colors = { workspace = true, features = ["supports-colors"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -70,6 +71,8 @@ tokio-tungstenite = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "json"] }
 uuid = { workspace = true, features = ["serde", "v7"] }
+walkdir = { workspace = true }
+xcap = { workspace = true }
 
 [dev-dependencies]
 app_test_support = { workspace = true }

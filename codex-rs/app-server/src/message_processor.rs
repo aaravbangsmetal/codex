@@ -15,6 +15,8 @@ use crate::outgoing_message::ConnectionId;
 use crate::outgoing_message::ConnectionRequestId;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::RequestContext;
+use crate::recording::SCREEN_RECORDING_FEATURE_DISABLED_MESSAGE;
+use crate::recording::ScreenRecordingManager;
 use crate::transport::AppServerTransport;
 use async_trait::async_trait;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
@@ -77,6 +79,7 @@ use tokio::time::Duration;
 use tokio::time::timeout;
 use toml::Value as TomlValue;
 use tracing::Instrument;
+use tracing::warn;
 
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
 const TUI_APP_SERVER_CLIENT_NAME: &str = "codex-tui";
@@ -154,6 +157,7 @@ pub(crate) struct MessageProcessor {
     auth_manager: Arc<AuthManager>,
     config: Arc<Config>,
     config_warnings: Arc<Vec<ConfigWarningNotification>>,
+    screen_recording_manager: ScreenRecordingManager,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -259,6 +263,12 @@ impl MessageProcessor {
         );
         let external_agent_config_api = ExternalAgentConfigApi::new(config.codex_home.clone());
         let fs_api = FsApi::default();
+        let screen_recording_manager = ScreenRecordingManager::new(
+            outgoing.clone(),
+            &config.codex_home,
+            config.features.enabled(Feature::ScreenRecording),
+            config.recording.screen.enabled,
+        );
 
         Self {
             outgoing,
@@ -269,6 +279,7 @@ impl MessageProcessor {
             auth_manager,
             config,
             config_warnings: Arc::new(config_warnings),
+            screen_recording_manager,
         }
     }
 
@@ -468,7 +479,8 @@ impl MessageProcessor {
             .await;
     }
 
-    pub(crate) async fn shutdown_threads(&self) {
+    pub(crate) async fn shutdown(&self) {
+        self.screen_recording_manager.shutdown().await;
         self.codex_message_processor.shutdown_threads().await;
     }
 
@@ -646,6 +658,36 @@ impl MessageProcessor {
                 )
                 .await;
             }
+            ClientRequest::ScreenRecordingRead {
+                request_id,
+                params: _,
+            } => {
+                self.handle_screen_recording_read(ConnectionRequestId {
+                    connection_id,
+                    request_id,
+                })
+                .await;
+            }
+            ClientRequest::ScreenRecordingPause {
+                request_id,
+                params: _,
+            } => {
+                self.handle_screen_recording_pause(ConnectionRequestId {
+                    connection_id,
+                    request_id,
+                })
+                .await;
+            }
+            ClientRequest::ScreenRecordingResume {
+                request_id,
+                params: _,
+            } => {
+                self.handle_screen_recording_resume(ConnectionRequestId {
+                    connection_id,
+                    request_id,
+                })
+                .await;
+            }
             ClientRequest::ExternalAgentConfigDetect { request_id, params } => {
                 self.handle_external_agent_config_detect(
                     ConnectionRequestId {
@@ -801,6 +843,7 @@ impl MessageProcessor {
                 self.codex_message_processor
                     .maybe_start_plugin_startup_tasks_for_latest_config()
                     .await;
+                self.reconcile_screen_recording_from_disk().await;
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(error) => self.outgoing.send_error(request_id, error).await,
@@ -818,9 +861,67 @@ impl MessageProcessor {
                 self.codex_message_processor
                     .maybe_start_plugin_startup_tasks_for_latest_config()
                     .await;
+                self.reconcile_screen_recording_from_disk().await;
                 self.outgoing.send_response(request_id, response).await;
             }
             Err(error) => self.outgoing.send_error(request_id, error).await,
+        }
+    }
+
+    async fn handle_screen_recording_read(&self, request_id: ConnectionRequestId) {
+        let response = self.screen_recording_manager.read().await;
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn handle_screen_recording_pause(&self, request_id: ConnectionRequestId) {
+        if !self.screen_recording_manager.feature_enabled().await {
+            self.outgoing
+                .send_error(
+                    request_id,
+                    JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: SCREEN_RECORDING_FEATURE_DISABLED_MESSAGE.to_string(),
+                        data: None,
+                    },
+                )
+                .await;
+            return;
+        }
+        let response = self.screen_recording_manager.pause().await;
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn handle_screen_recording_resume(&self, request_id: ConnectionRequestId) {
+        if !self.screen_recording_manager.feature_enabled().await {
+            self.outgoing
+                .send_error(
+                    request_id,
+                    JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: SCREEN_RECORDING_FEATURE_DISABLED_MESSAGE.to_string(),
+                        data: None,
+                    },
+                )
+                .await;
+            return;
+        }
+        let response = self.screen_recording_manager.resume().await;
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn reconcile_screen_recording_from_disk(&self) {
+        match self.config_api.load_effective_config().await {
+            Ok(config) => {
+                self.screen_recording_manager
+                    .reconcile(
+                        config.features.enabled(Feature::ScreenRecording),
+                        config.recording.screen.enabled,
+                    )
+                    .await;
+            }
+            Err(error) => {
+                warn!("failed to reconcile screen recording after config write: {error:?}");
+            }
         }
     }
 

@@ -1,5 +1,7 @@
 use super::ConfigToml;
 use super::deserialize_config_toml_with_base;
+use crate::config::Config;
+use crate::config::ConfigOverrides;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::managed_features::validate_explicit_feature_settings_in_config_toml;
@@ -246,6 +248,24 @@ impl ConfigService {
             .try_into()
             .map_err(|err| ConfigServiceError::toml("failed to parse config.toml", err))?;
         Ok(cfg.into())
+    }
+
+    pub async fn load_effective_config(&self) -> Result<Config, ConfigServiceError> {
+        let layers = self
+            .load_thread_agnostic_config()
+            .await
+            .map_err(|err| ConfigServiceError::io("failed to load configuration", err))?;
+        let merged_toml = layers.effective_config();
+        let config_toml: ConfigToml = merged_toml
+            .try_into()
+            .map_err(|err| ConfigServiceError::toml("invalid configuration", err))?;
+        Config::load_config_with_layer_stack(
+            config_toml,
+            ConfigOverrides::default(),
+            self.codex_home.clone(),
+            layers,
+        )
+        .map_err(|err| ConfigServiceError::io("failed to load effective configuration", err))
     }
 
     async fn apply_edits(

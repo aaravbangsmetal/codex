@@ -37,6 +37,12 @@ pub enum SlashCommand {
     Copy,
     Mention,
     Status,
+    #[strum(serialize = "recording-status")]
+    RecordingStatus,
+    #[strum(serialize = "recording-pause")]
+    RecordingPause,
+    #[strum(serialize = "recording-resume")]
+    RecordingResume,
     DebugConfig,
     Statusline,
     Theme,
@@ -85,6 +91,9 @@ impl SlashCommand {
             SlashCommand::Mention => "mention a file",
             SlashCommand::Skills => "use skills to improve how Codex performs specific tasks",
             SlashCommand::Status => "show current session configuration and token usage",
+            SlashCommand::RecordingStatus => "show background screen recording status",
+            SlashCommand::RecordingPause => "pause background screen recording",
+            SlashCommand::RecordingResume => "resume background screen recording",
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Statusline => "configure which items appear in the status line",
             SlashCommand::Theme => "choose a syntax highlighting theme",
@@ -163,6 +172,9 @@ impl SlashCommand {
             | SlashCommand::Mention
             | SlashCommand::Skills
             | SlashCommand::Status
+            | SlashCommand::RecordingStatus
+            | SlashCommand::RecordingPause
+            | SlashCommand::RecordingResume
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop

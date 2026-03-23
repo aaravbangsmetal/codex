@@ -721,6 +721,22 @@
         }
       ]
     },
+    "RecordingConfig": {
+      "properties": {
+        "screen": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ScreenRecordingConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "type": "object"
+    },
     "SandboxMode": {
       "enum": [
         "read-only",
@@ -749,6 +765,17 @@
             "type": "string"
           },
           "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ScreenRecordingConfig": {
+      "properties": {
+        "enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "type": "object"

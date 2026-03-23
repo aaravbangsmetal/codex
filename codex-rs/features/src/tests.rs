@@ -139,6 +139,12 @@ fn image_generation_is_under_development() {
 }
 
 #[test]
+fn screen_recording_is_under_development() {
+    assert_eq!(Feature::ScreenRecording.stage(), Stage::UnderDevelopment);
+    assert_eq!(Feature::ScreenRecording.default_enabled(), false);
+}
+
+#[test]
 fn image_detail_original_feature_is_under_development() {
     assert_eq!(
         Feature::ImageDetailOriginal.stage(),

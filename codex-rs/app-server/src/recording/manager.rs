@@ -1,0 +1,656 @@
+use super::backend::CaptureBackend;
+use super::backend::CaptureBackendFailure;
+use super::backend::CaptureBackendFailureKind;
+use super::backend::default_capture_backend;
+use super::persistence::CAPTURE_FPS;
+use super::persistence::CaptureState;
+use super::persistence::RETENTION_HOURS;
+use super::persistence::capture_tick;
+use super::persistence::prune_old_segments;
+use super::persistence::purge_storage;
+use crate::outgoing_message::OutgoingMessageSender;
+use codex_app_server_protocol::ScreenRecordingPauseResponse;
+use codex_app_server_protocol::ScreenRecordingPermission;
+use codex_app_server_protocol::ScreenRecordingReadResponse;
+use codex_app_server_protocol::ScreenRecordingResumeResponse;
+use codex_app_server_protocol::ScreenRecordingState;
+use codex_app_server_protocol::ScreenRecordingStatus;
+use codex_app_server_protocol::ScreenRecordingStatusUpdatedNotification;
+use codex_app_server_protocol::ServerNotification;
+use codex_utils_absolute_path::AbsolutePathBuf;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tokio::sync::Notify;
+use tokio::task::JoinHandle;
+use tokio::time::Duration;
+use tokio::time::MissedTickBehavior;
+use tokio_util::sync::CancellationToken;
+
+pub(crate) const SCREEN_RECORDING_FEATURE_DISABLED_MESSAGE: &str =
+    "screen recording feature is disabled";
+
+pub(crate) struct ScreenRecordingManager {
+    inner: Arc<Inner>,
+}
+
+struct Inner {
+    backend: Arc<dyn CaptureBackend>,
+    outgoing: Arc<OutgoingMessageSender>,
+    storage_root: PathBuf,
+    runtime: Mutex<RuntimeState>,
+    capture_state: Arc<std::sync::Mutex<CaptureState>>,
+    wake: Notify,
+}
+
+struct RuntimeState {
+    feature_enabled: bool,
+    config_enabled: bool,
+    paused: bool,
+    status: ScreenRecordingStatus,
+    task: Option<JoinHandle<()>>,
+    cancel: Option<CancellationToken>,
+    last_pruned_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StatusFingerprint {
+    state: ScreenRecordingState,
+    paused: bool,
+    permission: ScreenRecordingPermission,
+    captured_display_count: u32,
+    last_error: Option<String>,
+}
+
+impl ScreenRecordingManager {
+    pub(crate) fn new(
+        outgoing: Arc<OutgoingMessageSender>,
+        codex_home: &Path,
+        feature_enabled: bool,
+        config_enabled: bool,
+    ) -> Self {
+        Self::new_with_backend(
+            outgoing,
+            codex_home,
+            feature_enabled,
+            config_enabled,
+            default_capture_backend(),
+        )
+    }
+
+    pub(crate) fn new_with_backend(
+        outgoing: Arc<OutgoingMessageSender>,
+        codex_home: &Path,
+        feature_enabled: bool,
+        config_enabled: bool,
+        backend: Arc<dyn CaptureBackend>,
+    ) -> Self {
+        let storage_root = codex_home.join("recording").join("screen_ephemeral");
+        let storage_path = match AbsolutePathBuf::try_from(storage_root.clone()) {
+            Ok(storage_path) => storage_path,
+            Err(error) => {
+                panic!("screen recording storage path should be absolute: {error}");
+            }
+        };
+        let status = status_for_availability(
+            feature_enabled,
+            config_enabled,
+            backend.platform(),
+            backend.kind(),
+            storage_path,
+        );
+        let manager = Self {
+            inner: Arc::new(Inner {
+                backend,
+                outgoing,
+                storage_root,
+                runtime: Mutex::new(RuntimeState {
+                    feature_enabled,
+                    config_enabled,
+                    paused: false,
+                    status,
+                    task: None,
+                    cancel: None,
+                    last_pruned_at: None,
+                }),
+                capture_state: Arc::new(std::sync::Mutex::new(CaptureState::default())),
+                wake: Notify::new(),
+            }),
+        };
+        if feature_enabled && config_enabled {
+            let manager_clone = manager.clone();
+            tokio::spawn(async move {
+                let _status = manager_clone
+                    .reconcile(feature_enabled, config_enabled)
+                    .await;
+            });
+        }
+        manager
+    }
+
+    pub(crate) async fn feature_enabled(&self) -> bool {
+        self.inner.runtime.lock().await.feature_enabled
+    }
+
+    pub(crate) async fn read(&self) -> ScreenRecordingReadResponse {
+        ScreenRecordingReadResponse {
+            status: self.current_status().await,
+        }
+    }
+
+    pub(crate) async fn pause(&self) -> ScreenRecordingPauseResponse {
+        let status = {
+            let mut runtime = self.inner.runtime.lock().await;
+            if !runtime.feature_enabled || !runtime.config_enabled {
+                runtime.status.clone()
+            } else {
+                runtime.paused = true;
+                let mut status = runtime.status.clone();
+                status.paused = true;
+                status.state = ScreenRecordingState::Paused;
+                status
+            }
+        };
+        self.inner.wake.notify_waiters();
+        self.replace_status(status, /*notify*/ true).await;
+        ScreenRecordingPauseResponse {
+            status: self.current_status().await,
+        }
+    }
+
+    pub(crate) async fn resume(&self) -> ScreenRecordingResumeResponse {
+        let mut should_start_task = false;
+        let status = {
+            let mut runtime = self.inner.runtime.lock().await;
+            if !runtime.feature_enabled || !runtime.config_enabled {
+                runtime.status.clone()
+            } else {
+                runtime.paused = false;
+                let mut status = runtime.status.clone();
+                status.paused = false;
+                status.state = ScreenRecordingState::Starting;
+                if runtime.task.is_none() {
+                    should_start_task = true;
+                }
+                status
+            }
+        };
+        if should_start_task {
+            self.ensure_task_running().await;
+        } else {
+            self.inner.wake.notify_waiters();
+        }
+        self.replace_status(status, /*notify*/ true).await;
+        ScreenRecordingResumeResponse {
+            status: self.current_status().await,
+        }
+    }
+
+    pub(crate) async fn reconcile(
+        &self,
+        feature_enabled: bool,
+        config_enabled: bool,
+    ) -> ScreenRecordingStatus {
+        if feature_enabled && config_enabled {
+            self.ensure_task_running().await;
+            let status = {
+                let mut runtime = self.inner.runtime.lock().await;
+                runtime.feature_enabled = true;
+                runtime.config_enabled = true;
+                let mut status = runtime.status.clone();
+                status.paused = runtime.paused;
+                if runtime.paused {
+                    status.state = ScreenRecordingState::Paused;
+                } else {
+                    status.state = ScreenRecordingState::Starting;
+                }
+                status
+            };
+            self.replace_status(status, /*notify*/ true).await;
+            return self.current_status().await;
+        }
+
+        let (storage_path, platform, backend_kind) = {
+            let mut runtime = self.inner.runtime.lock().await;
+            runtime.feature_enabled = feature_enabled;
+            runtime.config_enabled = config_enabled;
+            runtime.paused = false;
+            (
+                runtime.status.storage_path.clone(),
+                runtime.status.platform,
+                runtime.status.backend,
+            )
+        };
+        self.stop_capture_and_reset().await;
+
+        let status = {
+            let mut runtime = self.inner.runtime.lock().await;
+            runtime.last_pruned_at = None;
+            status_for_availability(
+                feature_enabled,
+                config_enabled,
+                platform,
+                backend_kind,
+                storage_path,
+            )
+        };
+        self.replace_status(status, /*notify*/ true).await;
+        self.current_status().await
+    }
+
+    pub(crate) async fn shutdown(&self) {
+        let (cancel, task) = {
+            let mut runtime = self.inner.runtime.lock().await;
+            (runtime.cancel.take(), runtime.task.take())
+        };
+        if let Some(cancel) = cancel {
+            cancel.cancel();
+        }
+        if let Some(task) = task {
+            let _ = task.await;
+        }
+    }
+
+    async fn ensure_task_running(&self) {
+        {
+            let mut runtime = self.inner.runtime.lock().await;
+            if runtime.task.is_some() {
+                return;
+            }
+            let cancel = CancellationToken::new();
+            let cancel_for_task = cancel.clone();
+            let inner = Arc::clone(&self.inner);
+            runtime.cancel = Some(cancel);
+            runtime.task = Some(tokio::spawn(async move {
+                inner.run(cancel_for_task).await;
+            }));
+        }
+        self.inner.wake.notify_waiters();
+    }
+
+    async fn stop_capture_and_reset(&self) {
+        let (cancel, task) = {
+            let mut runtime = self.inner.runtime.lock().await;
+            (runtime.cancel.take(), runtime.task.take())
+        };
+        if let Some(cancel) = cancel {
+            cancel.cancel();
+        }
+        if let Some(task) = task {
+            let _ = task.await;
+        }
+        let _ = purge_storage(&self.inner.storage_root);
+        if let Ok(mut capture_state) = self.inner.capture_state.lock() {
+            *capture_state = CaptureState::default();
+        }
+    }
+
+    async fn current_status(&self) -> ScreenRecordingStatus {
+        self.inner.runtime.lock().await.status.clone()
+    }
+
+    async fn replace_status(&self, status: ScreenRecordingStatus, notify: bool) {
+        let should_notify = {
+            let mut runtime = self.inner.runtime.lock().await;
+            let old_fingerprint = fingerprint(&runtime.status);
+            let new_fingerprint = fingerprint(&status);
+            runtime.status = status.clone();
+            notify && old_fingerprint != new_fingerprint
+        };
+        if should_notify {
+            self.inner
+                .outgoing
+                .send_server_notification(ServerNotification::ScreenRecordingStatusUpdated(
+                    ScreenRecordingStatusUpdatedNotification { status },
+                ))
+                .await;
+        }
+    }
+}
+
+impl Clone for ScreenRecordingManager {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
+}
+
+impl Inner {
+    async fn run(self: Arc<Self>, cancel: CancellationToken) {
+        let now = chrono::Utc::now();
+        self.prune_if_needed(now).await;
+
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
+        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => break,
+                _ = interval.tick() => {}
+                _ = self.wake.notified() => {}
+            }
+
+            if cancel.is_cancelled() {
+                break;
+            }
+
+            let paused = {
+                let runtime = self.runtime.lock().await;
+                !runtime.feature_enabled || !runtime.config_enabled || runtime.paused
+            };
+            if paused {
+                continue;
+            }
+
+            let backend = Arc::clone(&self.backend);
+            let capture_state = Arc::clone(&self.capture_state);
+            let storage_root = self.storage_root.clone();
+            let captured_at = chrono::Utc::now();
+
+            let result = tokio::task::spawn_blocking(move || {
+                let mut capture_state = match capture_state.lock() {
+                    Ok(capture_state) => capture_state,
+                    Err(_) => {
+                        return Err(CaptureBackendFailure::other(
+                            "screen recording capture state lock should not be poisoned",
+                        ));
+                    }
+                };
+                capture_tick(
+                    &storage_root,
+                    &mut capture_state,
+                    backend.as_ref(),
+                    captured_at,
+                )
+            })
+            .await;
+
+            match result {
+                Ok(Ok(outcome)) => {
+                    self.prune_if_needed(captured_at).await;
+                    let status = {
+                        let runtime = self.runtime.lock().await;
+                        let mut status = runtime.status.clone();
+                        status.state = ScreenRecordingState::Running;
+                        status.paused = false;
+                        status.permission = ScreenRecordingPermission::Granted;
+                        status.captured_display_count = outcome.captured_display_count;
+                        status.newest_frame_at = outcome.newest_frame_at.or(status.newest_frame_at);
+                        status.last_error = None;
+                        status
+                    };
+                    ScreenRecordingManager {
+                        inner: Arc::clone(&self),
+                    }
+                    .replace_status(status, /*notify*/ true)
+                    .await;
+                }
+                Ok(Err(error)) => {
+                    let status = {
+                        let runtime = self.runtime.lock().await;
+                        let mut status = runtime.status.clone();
+                        apply_backend_error_status(&mut status, &error);
+                        status
+                    };
+                    ScreenRecordingManager {
+                        inner: Arc::clone(&self),
+                    }
+                    .replace_status(status, /*notify*/ true)
+                    .await;
+                }
+                Err(join_error) => {
+                    let status = {
+                        let runtime = self.runtime.lock().await;
+                        let mut status = runtime.status.clone();
+                        status.state = ScreenRecordingState::Error;
+                        status.last_error =
+                            Some(format!("screen recording worker failed: {join_error}"));
+                        status
+                    };
+                    ScreenRecordingManager {
+                        inner: Arc::clone(&self),
+                    }
+                    .replace_status(status, /*notify*/ true)
+                    .await;
+                }
+            }
+        }
+    }
+
+    async fn prune_if_needed(&self, captured_at: chrono::DateTime<chrono::Utc>) {
+        let should_prune = {
+            let mut runtime = self.runtime.lock().await;
+            match runtime.last_pruned_at {
+                Some(last_pruned_at) if captured_at.timestamp() - last_pruned_at < 60 => false,
+                _ => {
+                    runtime.last_pruned_at = Some(captured_at.timestamp());
+                    true
+                }
+            }
+        };
+        if !should_prune {
+            return;
+        }
+
+        let storage_root = self.storage_root.clone();
+        let _ = tokio::task::spawn_blocking(move || prune_old_segments(&storage_root, captured_at))
+            .await;
+    }
+}
+
+fn fingerprint(status: &ScreenRecordingStatus) -> StatusFingerprint {
+    StatusFingerprint {
+        state: status.state,
+        paused: status.paused,
+        permission: status.permission,
+        captured_display_count: status.captured_display_count,
+        last_error: status.last_error.clone(),
+    }
+}
+
+fn status_for_availability(
+    feature_enabled: bool,
+    config_enabled: bool,
+    platform: codex_app_server_protocol::ScreenRecordingPlatform,
+    backend: codex_app_server_protocol::ScreenRecordingBackend,
+    storage_path: AbsolutePathBuf,
+) -> ScreenRecordingStatus {
+    ScreenRecordingStatus {
+        state: if feature_enabled && config_enabled {
+            ScreenRecordingState::Starting
+        } else {
+            ScreenRecordingState::Disabled
+        },
+        paused: false,
+        platform,
+        backend,
+        permission: ScreenRecordingPermission::Unknown,
+        capture_fps: CAPTURE_FPS,
+        retention_hours: RETENTION_HOURS,
+        storage_path,
+        captured_display_count: 0,
+        newest_frame_at: None,
+        last_error: (!feature_enabled && config_enabled)
+            .then(|| SCREEN_RECORDING_FEATURE_DISABLED_MESSAGE.to_string()),
+    }
+}
+
+fn apply_backend_error_status(status: &mut ScreenRecordingStatus, error: &CaptureBackendFailure) {
+    status.captured_display_count = 0;
+    status.last_error = Some(error.message.clone());
+    status.permission = error.permission;
+    status.state = match error.kind {
+        CaptureBackendFailureKind::Unsupported => ScreenRecordingState::Unsupported,
+        CaptureBackendFailureKind::PermissionRequired | CaptureBackendFailureKind::Other => {
+            ScreenRecordingState::Error
+        }
+    };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::outgoing_message::OutgoingEnvelope;
+    use crate::recording::backend::CaptureBackend;
+    use crate::recording::backend::CaptureBackendFailure;
+    use crate::recording::backend::CapturedDisplay;
+    use crate::recording::backend::DisplayGeometry;
+    use codex_app_server_protocol::ScreenRecordingBackend;
+    use codex_app_server_protocol::ScreenRecordingPermission;
+    use codex_app_server_protocol::ScreenRecordingPlatform;
+    use image::Rgba;
+    use image::RgbaImage;
+    use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
+    use tokio::sync::mpsc;
+    use tokio::time::Instant;
+
+    struct StaticBackend {
+        result: Result<Vec<CapturedDisplay>, CaptureBackendFailure>,
+    }
+
+    impl CaptureBackend for StaticBackend {
+        fn kind(&self) -> ScreenRecordingBackend {
+            ScreenRecordingBackend::Xcap
+        }
+
+        fn platform(&self) -> ScreenRecordingPlatform {
+            ScreenRecordingPlatform::Macos
+        }
+
+        fn capture_displays(&self) -> Result<Vec<CapturedDisplay>, CaptureBackendFailure> {
+            self.result.clone()
+        }
+    }
+
+    fn successful_backend() -> Arc<dyn CaptureBackend> {
+        let mut frame = RgbaImage::new(8, 8);
+        for pixel in frame.pixels_mut() {
+            *pixel = Rgba([40, 80, 120, 255]);
+        }
+        Arc::new(StaticBackend {
+            result: Ok(vec![CapturedDisplay {
+                id: "display-1".to_string(),
+                name: "Display 1".to_string(),
+                geometry: DisplayGeometry {
+                    width: 8,
+                    height: 8,
+                    rotation_millidegrees: 0,
+                    scale_factor_milli: 1000,
+                },
+                frame,
+            }]),
+        })
+    }
+
+    async fn wait_for_state(
+        manager: &ScreenRecordingManager,
+        expected_state: ScreenRecordingState,
+    ) -> ScreenRecordingStatus {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let status = manager.current_status().await;
+            if status.state == expected_state {
+                return status;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for state {expected_state:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn enabled_manager_autostarts_capture() {
+        let temp_dir = TempDir::new().expect("tmpdir");
+        let (tx, _rx) = mpsc::channel::<OutgoingEnvelope>(8);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let manager = ScreenRecordingManager::new_with_backend(
+            outgoing,
+            temp_dir.path(),
+            true,
+            true,
+            successful_backend(),
+        );
+
+        let status = wait_for_state(&manager, ScreenRecordingState::Running).await;
+        assert_eq!(status.permission, ScreenRecordingPermission::Granted);
+        assert_eq!(status.captured_display_count, 1);
+        manager.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pause_and_resume_change_runtime_state() {
+        let temp_dir = TempDir::new().expect("tmpdir");
+        let (tx, _rx) = mpsc::channel::<OutgoingEnvelope>(8);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let manager = ScreenRecordingManager::new_with_backend(
+            outgoing,
+            temp_dir.path(),
+            true,
+            true,
+            successful_backend(),
+        );
+        let _running = wait_for_state(&manager, ScreenRecordingState::Running).await;
+
+        let paused = manager.pause().await.status;
+        assert_eq!(paused.state, ScreenRecordingState::Paused);
+        assert!(paused.paused);
+
+        let resumed = manager.resume().await.status;
+        assert_eq!(resumed.state, ScreenRecordingState::Starting);
+        let running = wait_for_state(&manager, ScreenRecordingState::Running).await;
+        assert!(!running.paused);
+        manager.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn disabling_purges_storage() {
+        let temp_dir = TempDir::new().expect("tmpdir");
+        let (tx, _rx) = mpsc::channel::<OutgoingEnvelope>(8);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let manager = ScreenRecordingManager::new_with_backend(
+            outgoing,
+            temp_dir.path(),
+            true,
+            true,
+            successful_backend(),
+        );
+        let running = wait_for_state(&manager, ScreenRecordingState::Running).await;
+        assert!(running.storage_path.as_path().exists());
+
+        let disabled = manager.reconcile(true, false).await;
+        assert_eq!(disabled.state, ScreenRecordingState::Disabled);
+        assert!(!running.storage_path.as_path().exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn feature_gate_blocks_start_until_enabled() {
+        let temp_dir = TempDir::new().expect("tmpdir");
+        let (tx, _rx) = mpsc::channel::<OutgoingEnvelope>(8);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let manager = ScreenRecordingManager::new_with_backend(
+            outgoing,
+            temp_dir.path(),
+            false,
+            true,
+            successful_backend(),
+        );
+
+        let disabled = manager.current_status().await;
+        assert_eq!(disabled.state, ScreenRecordingState::Disabled);
+        assert_eq!(
+            disabled.last_error.as_deref(),
+            Some(SCREEN_RECORDING_FEATURE_DISABLED_MESSAGE)
+        );
+
+        let running = manager.reconcile(true, true).await;
+        assert_eq!(running.state, ScreenRecordingState::Starting);
+        let running = wait_for_state(&manager, ScreenRecordingState::Running).await;
+        assert_eq!(running.captured_display_count, 1);
+        manager.shutdown().await;
+    }
+}

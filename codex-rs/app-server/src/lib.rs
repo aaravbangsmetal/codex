@@ -71,6 +71,7 @@ pub mod in_process;
 mod message_processor;
 mod models;
 mod outgoing_message;
+mod recording;
 mod server_request_error;
 mod thread_state;
 mod thread_status;
@@ -832,7 +833,7 @@ pub async fn run_main_with_transport(
 
             if !shutdown_state.forced() {
                 processor.drain_background_tasks().await;
-                processor.shutdown_threads().await;
+                processor.shutdown().await;
             }
             info!("processor task exited (channel closed)");
         }

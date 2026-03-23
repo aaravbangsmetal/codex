@@ -876,6 +876,9 @@ impl CodexMessageProcessor {
                     .await;
             }
             ClientRequest::ConfigRead { .. }
+            | ClientRequest::ScreenRecordingRead { .. }
+            | ClientRequest::ScreenRecordingPause { .. }
+            | ClientRequest::ScreenRecordingResume { .. }
             | ClientRequest::ConfigValueWrite { .. }
             | ClientRequest::ConfigBatchWrite { .. } => {
                 warn!("Config request reached CodexMessageProcessor unexpectedly");

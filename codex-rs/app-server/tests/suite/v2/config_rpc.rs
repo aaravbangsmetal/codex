@@ -17,8 +17,10 @@ use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::MergeStrategy;
+use codex_app_server_protocol::RecordingConfig as ApiRecordingConfig;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
+use codex_app_server_protocol::ScreenRecordingConfig as ApiScreenRecordingConfig;
 use codex_app_server_protocol::ToolsV2;
 use codex_app_server_protocol::WriteStatus;
 use codex_core::config::set_project_trust_level;
@@ -329,6 +331,59 @@ default_tools_approval_mode = "prompt"
 
     let layers = layers.expect("layers present");
     assert_layers_user_then_optional_system(&layers, user_file)?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_read_includes_recording_screen_enabled() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_config(
+        &codex_home,
+        r#"
+[recording.screen]
+enabled = true
+"#,
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.initialize_with_capabilities(
+            codex_app_server_protocol::ClientInfo {
+                name: "codex_vscode".to_string(),
+                title: Some("Codex VS Code Extension".to_string()),
+                version: "0.1.0".to_string(),
+            },
+            Some(codex_app_server_protocol::InitializeCapabilities {
+                experimental_api: true,
+                opt_out_notification_methods: None,
+            }),
+        ),
+    )
+    .await??;
+
+    let request_id = mcp
+        .send_config_read_request(ConfigReadParams {
+            include_layers: false,
+            cwd: None,
+        })
+        .await?;
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    let ConfigReadResponse { config, .. } = to_response(resp)?;
+
+    assert_eq!(
+        config.recording,
+        Some(ApiRecordingConfig {
+            screen: Some(ApiScreenRecordingConfig {
+                enabled: Some(true),
+            }),
+        })
+    );
 
     Ok(())
 }

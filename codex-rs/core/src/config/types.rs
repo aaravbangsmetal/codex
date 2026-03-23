@@ -487,6 +487,40 @@ impl From<MemoriesToml> for MemoriesConfig {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ScreenRecordingToml {
+    pub enabled: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct RecordingToml {
+    #[serde(default)]
+    pub screen: Option<ScreenRecordingToml>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ScreenRecordingConfig {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RecordingConfig {
+    pub screen: ScreenRecordingConfig,
+}
+
+impl From<RecordingToml> for RecordingConfig {
+    fn from(toml: RecordingToml) -> Self {
+        let screen = toml.screen.unwrap_or_default();
+        Self {
+            screen: ScreenRecordingConfig {
+                enabled: screen.enabled.unwrap_or(false),
+            },
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AppToolApproval {

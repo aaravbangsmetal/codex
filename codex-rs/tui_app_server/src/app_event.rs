@@ -14,6 +14,7 @@ use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
+use codex_app_server_protocol::ScreenRecordingStatus;
 use codex_chatgpt::connectors::AppInfo;
 use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
@@ -69,6 +70,13 @@ pub(crate) enum WindowsSandboxEnableMode {
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) struct ConnectorsSnapshot {
     pub(crate) connectors: Vec<AppInfo>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScreenRecordingAction {
+    Read,
+    Pause,
+    Resume,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -201,6 +209,21 @@ pub(crate) enum AppEvent {
     /// Result of fetching MCP inventory via app-server RPCs.
     McpInventoryLoaded {
         result: Result<Vec<McpServerStatus>, String>,
+    },
+
+    /// Read the current screen recording status via app-server RPC.
+    FetchScreenRecordingStatus,
+
+    /// Pause process-scoped screen recording via app-server RPC.
+    PauseScreenRecording,
+
+    /// Resume process-scoped screen recording via app-server RPC.
+    ResumeScreenRecording,
+
+    /// Result of a screen recording RPC.
+    ScreenRecordingLoaded {
+        action: ScreenRecordingAction,
+        result: Result<ScreenRecordingStatus, String>,
     },
 
     InsertHistoryCell(Box<dyn HistoryCell>),

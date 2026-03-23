@@ -324,6 +324,7 @@ walkdir = "2.5.0"
 webbrowser = "1.0"
 which = "8"
 wildmatch = "2.6.1"
+xcap = "0.9.3"
 zip = "2.4.2"
 zstd = "0.13"
 

@@ -4891,6 +4891,15 @@ impl ChatWidget {
             SlashCommand::Status => {
                 self.add_status_output();
             }
+            SlashCommand::RecordingStatus => {
+                self.app_event_tx.send(AppEvent::FetchScreenRecordingStatus);
+            }
+            SlashCommand::RecordingPause => {
+                self.app_event_tx.send(AppEvent::PauseScreenRecording);
+            }
+            SlashCommand::RecordingResume => {
+                self.app_event_tx.send(AppEvent::ResumeScreenRecording);
+            }
             SlashCommand::DebugConfig => {
                 self.add_debug_config_output();
             }
@@ -6149,6 +6158,7 @@ impl ChatWidget {
             | ServerNotification::McpServerOauthLoginCompleted(_)
             | ServerNotification::AppListUpdated(_)
             | ServerNotification::ContextCompacted(_)
+            | ServerNotification::ScreenRecordingStatusUpdated(_)
             | ServerNotification::FuzzyFileSearchSessionUpdated(_)
             | ServerNotification::FuzzyFileSearchSessionCompleted(_)
             | ServerNotification::ThreadRealtimeTranscriptUpdated(_)

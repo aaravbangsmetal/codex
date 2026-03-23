@@ -708,6 +708,21 @@ pub struct AppsConfig {
     pub apps: HashMap<String, AppConfig>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub struct ScreenRecordingConfig {
+    pub enabled: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub struct RecordingConfig {
+    #[serde(default)]
+    pub screen: Option<ScreenRecordingConfig>,
+}
+
 const fn default_enabled() -> bool {
     true
 }
@@ -752,6 +767,9 @@ pub struct Config {
     #[experimental("config/read.apps")]
     #[serde(default)]
     pub apps: Option<AppsConfig>,
+    #[experimental("config/read.recording")]
+    #[serde(default)]
+    pub recording: Option<RecordingConfig>,
     #[serde(default, flatten)]
     pub additional: HashMap<String, JsonValue>,
 }
@@ -882,6 +900,90 @@ pub struct NetworkRequirements {
 #[ts(export_to = "v2/")]
 pub enum ResidencyRequirement {
     Us,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ScreenRecordingState {
+    Disabled,
+    Starting,
+    Running,
+    Paused,
+    Error,
+    Unsupported,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ScreenRecordingPermission {
+    Unknown,
+    NotRequired,
+    Granted,
+    Denied,
+    Required,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ScreenRecordingBackend {
+    Xcap,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub enum ScreenRecordingPlatform {
+    Macos,
+    Windows,
+    Linux,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ScreenRecordingStatus {
+    pub state: ScreenRecordingState,
+    pub paused: bool,
+    pub platform: ScreenRecordingPlatform,
+    pub backend: ScreenRecordingBackend,
+    pub permission: ScreenRecordingPermission,
+    pub capture_fps: u32,
+    pub retention_hours: u32,
+    pub storage_path: AbsolutePathBuf,
+    pub captured_display_count: u32,
+    pub newest_frame_at: Option<i64>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ScreenRecordingReadResponse {
+    pub status: ScreenRecordingStatus,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ScreenRecordingPauseResponse {
+    pub status: ScreenRecordingStatus,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ScreenRecordingResumeResponse {
+    pub status: ScreenRecordingStatus,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ScreenRecordingStatusUpdatedNotification {
+    pub status: ScreenRecordingStatus,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
@@ -6975,6 +7077,7 @@ mod tests {
             service_tier: None,
             analytics: None,
             apps: None,
+            recording: None,
             additional: HashMap::new(),
         });
 
@@ -7008,10 +7111,49 @@ mod tests {
             service_tier: None,
             analytics: None,
             apps: None,
+            recording: None,
             additional: HashMap::new(),
         });
 
         assert_eq!(reason, Some("config/read.approvalsReviewer"));
+    }
+
+    #[test]
+    fn config_recording_is_marked_experimental() {
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&Config {
+            model: None,
+            review_model: None,
+            model_context_window: None,
+            model_auto_compact_token_limit: None,
+            model_provider: None,
+            approval_policy: None,
+            approvals_reviewer: None,
+            sandbox_mode: None,
+            sandbox_workspace_write: None,
+            forced_chatgpt_workspace_id: None,
+            forced_login_method: None,
+            web_search: None,
+            tools: None,
+            profile: None,
+            profiles: HashMap::new(),
+            instructions: None,
+            developer_instructions: None,
+            compact_prompt: None,
+            model_reasoning_effort: None,
+            model_reasoning_summary: None,
+            model_verbosity: None,
+            service_tier: None,
+            analytics: None,
+            apps: None,
+            recording: Some(RecordingConfig {
+                screen: Some(ScreenRecordingConfig {
+                    enabled: Some(true),
+                }),
+            }),
+            additional: HashMap::new(),
+        });
+
+        assert_eq!(reason, Some("config/read.recording"));
     }
 
     #[test]
@@ -7063,6 +7205,7 @@ mod tests {
             service_tier: None,
             analytics: None,
             apps: None,
+            recording: None,
             additional: HashMap::new(),
         });
 
@@ -7112,6 +7255,7 @@ mod tests {
             service_tier: None,
             analytics: None,
             apps: None,
+            recording: None,
             additional: HashMap::new(),
         });
 

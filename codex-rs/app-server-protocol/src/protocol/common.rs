@@ -78,6 +78,12 @@ macro_rules! experimental_type_entry {
     };
 }
 
+macro_rules! type_name_entry {
+    ($ty:ty) => {
+        stringify!($ty)
+    };
+}
+
 /// Generates an `enum ClientRequest` where each variant is a request that the
 /// client can send to the server. Each variant has associated `params` and
 /// `response` types. Also generates a `export_client_responses()` function to
@@ -160,6 +166,11 @@ macro_rules! client_request_definitions {
         pub(crate) const EXPERIMENTAL_CLIENT_METHOD_RESPONSE_TYPES: &[&str] = &[
             $(
                 experimental_type_entry!($(#[experimental($reason)])? $response),
+            )*
+        ];
+        pub(crate) const ALL_CLIENT_METHOD_RESPONSE_TYPES: &[&str] = &[
+            $(
+                type_name_entry!($response),
             )*
         ];
 
@@ -478,6 +489,21 @@ client_request_definitions! {
         params: v2::ConfigReadParams,
         response: v2::ConfigReadResponse,
     },
+    #[experimental("recording/screen/read")]
+    ScreenRecordingRead => "recording/screen/read" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: v2::ScreenRecordingReadResponse,
+    },
+    #[experimental("recording/screen/pause")]
+    ScreenRecordingPause => "recording/screen/pause" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: v2::ScreenRecordingPauseResponse,
+    },
+    #[experimental("recording/screen/resume")]
+    ScreenRecordingResume => "recording/screen/resume" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: v2::ScreenRecordingResumeResponse,
+    },
     ExternalAgentConfigDetect => "externalAgentConfig/detect" {
         params: v2::ExternalAgentConfigDetectParams,
         response: v2::ExternalAgentConfigDetectResponse,
@@ -606,6 +632,12 @@ macro_rules! server_request_definitions {
                 v.visit::<$response>();
             )*
         }
+
+        pub(crate) const ALL_SERVER_REQUEST_RESPONSE_TYPES: &[&str] = &[
+            $(
+                type_name_entry!($response),
+            )*
+        ];
 
         #[allow(clippy::vec_init_then_push)]
         pub fn export_server_response_schemas(
@@ -917,6 +949,8 @@ server_notification_definitions! {
     ModelRerouted => "model/rerouted" (v2::ModelReroutedNotification),
     DeprecationNotice => "deprecationNotice" (v2::DeprecationNoticeNotification),
     ConfigWarning => "configWarning" (v2::ConfigWarningNotification),
+    #[experimental("recording/screen/status/updated")]
+    ScreenRecordingStatusUpdated => "recording/screen/status/updated" (v2::ScreenRecordingStatusUpdatedNotification),
     FuzzyFileSearchSessionUpdated => "fuzzyFileSearch/sessionUpdated" (FuzzyFileSearchSessionUpdatedNotification),
     FuzzyFileSearchSessionCompleted => "fuzzyFileSearch/sessionCompleted" (FuzzyFileSearchSessionCompletedNotification),
     #[experimental("thread/realtime/started")]
@@ -942,6 +976,26 @@ server_notification_definitions! {
     AccountLoginCompleted(v2::AccountLoginCompletedNotification),
 
 }
+
+pub(crate) const EXPERIMENTAL_SERVER_NOTIFICATION_METHODS: &[&str] = &[
+    "recording/screen/status/updated",
+    "thread/realtime/started",
+    "thread/realtime/itemAdded",
+    "thread/realtime/transcriptUpdated",
+    "thread/realtime/outputAudio/delta",
+    "thread/realtime/error",
+    "thread/realtime/closed",
+];
+
+pub(crate) const EXPERIMENTAL_SERVER_NOTIFICATION_PAYLOAD_TYPES: &[&str] = &[
+    "v2::ScreenRecordingStatusUpdatedNotification",
+    "v2::ThreadRealtimeStartedNotification",
+    "v2::ThreadRealtimeItemAddedNotification",
+    "v2::ThreadRealtimeTranscriptUpdatedNotification",
+    "v2::ThreadRealtimeOutputAudioDeltaNotification",
+    "v2::ThreadRealtimeErrorNotification",
+    "v2::ThreadRealtimeClosedNotification",
+];
 
 client_notification_definitions! {
     Initialized,
@@ -1272,6 +1326,22 @@ mod tests {
             json!({
                 "method": "configRequirements/read",
                 "id": 1,
+            }),
+            serde_json::to_value(&request)?,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_screen_recording_read() -> Result<()> {
+        let request = ClientRequest::ScreenRecordingRead {
+            request_id: RequestId::Integer(2),
+            params: None,
+        };
+        assert_eq!(
+            json!({
+                "method": "recording/screen/read",
+                "id": 2,
             }),
             serde_json::to_value(&request)?,
         );
@@ -1618,6 +1688,40 @@ mod tests {
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
         assert_eq!(reason, Some("mock/experimentalMethod"));
     }
+
+    #[test]
+    fn screen_recording_read_is_marked_experimental() {
+        let request = ClientRequest::ScreenRecordingRead {
+            request_id: RequestId::Integer(1),
+            params: None,
+        };
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&request);
+        assert_eq!(reason, Some("recording/screen/read"));
+    }
+
+    #[test]
+    fn screen_recording_status_updated_notification_is_marked_experimental() {
+        let notification = ServerNotification::ScreenRecordingStatusUpdated(
+            v2::ScreenRecordingStatusUpdatedNotification {
+                status: v2::ScreenRecordingStatus {
+                    state: v2::ScreenRecordingState::Running,
+                    paused: false,
+                    platform: v2::ScreenRecordingPlatform::Macos,
+                    backend: v2::ScreenRecordingBackend::Xcap,
+                    permission: v2::ScreenRecordingPermission::Granted,
+                    capture_fps: 1,
+                    retention_hours: 6,
+                    storage_path: absolute_path("tmp/recording"),
+                    captured_display_count: 1,
+                    newest_frame_at: Some(1_700_000_000),
+                    last_error: None,
+                },
+            },
+        );
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&notification);
+        assert_eq!(reason, Some("recording/screen/status/updated"));
+    }
+
     #[test]
     fn thread_realtime_start_is_marked_experimental() {
         let request = ClientRequest::ThreadRealtimeStart {

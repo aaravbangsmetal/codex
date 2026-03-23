@@ -14,6 +14,7 @@ use codex_app_server_protocol::NetworkRequirements;
 use codex_app_server_protocol::SandboxMode;
 use codex_core::AnalyticsEventsClient;
 use codex_core::ThreadManager;
+use codex_core::config::Config as EffectiveConfig;
 use codex_core::config::ConfigService;
 use codex_core::config::ConfigServiceError;
 use codex_core::config_loader::CloudRequirementsLoader;
@@ -114,6 +115,13 @@ impl ConfigApi {
             .map(map_requirements_toml_to_api);
 
         Ok(ConfigRequirementsReadResponse { requirements })
+    }
+
+    pub(crate) async fn load_effective_config(&self) -> Result<EffectiveConfig, JSONRPCErrorError> {
+        self.config_service()
+            .load_effective_config()
+            .await
+            .map_err(map_error)
     }
 
     pub(crate) async fn write_value(

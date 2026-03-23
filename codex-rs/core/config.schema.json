@@ -458,6 +458,9 @@
             "runtime_metrics": {
               "type": "boolean"
             },
+            "screen_recording": {
+              "type": "boolean"
+            },
             "search_tool": {
               "type": "boolean"
             },
@@ -1417,6 +1420,20 @@
         }
       ]
     },
+    "RecordingToml": {
+      "additionalProperties": false,
+      "properties": {
+        "screen": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ScreenRecordingToml"
+            }
+          ],
+          "default": null
+        }
+      },
+      "type": "object"
+    },
     "SandboxMode": {
       "enum": [
         "read-only",
@@ -1446,6 +1463,15 @@
             "$ref": "#/definitions/AbsolutePathBuf"
           },
           "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ScreenRecordingToml": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -2064,6 +2090,9 @@
         "runtime_metrics": {
           "type": "boolean"
         },
+        "screen_recording": {
+          "type": "boolean"
+        },
         "search_tool": {
           "type": "boolean"
         },
@@ -2405,6 +2434,15 @@
       ],
       "default": null,
       "description": "Experimental / do not use. Realtime websocket session selection. `version` controls v1/v2 and `type` controls conversational/transcription."
+    },
+    "recording": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/RecordingToml"
+        }
+      ],
+      "default": null,
+      "description": "Background screen recording settings."
     },
     "review_model": {
       "description": "Review model override used by the `/review` feature.",

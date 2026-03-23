@@ -740,6 +740,30 @@ impl McpProcess {
         self.send_request("config/batchWrite", params).await
     }
 
+    pub async fn send_screen_recording_read_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request(
+            "recording/screen/read",
+            /*params*/ Option::<serde_json::Value>::None,
+        )
+        .await
+    }
+
+    pub async fn send_screen_recording_pause_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request(
+            "recording/screen/pause",
+            /*params*/ Option::<serde_json::Value>::None,
+        )
+        .await
+    }
+
+    pub async fn send_screen_recording_resume_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request(
+            "recording/screen/resume",
+            /*params*/ Option::<serde_json::Value>::None,
+        )
+        .await
+    }
+
     pub async fn send_fs_read_file_request(
         &mut self,
         params: FsReadFileParams,

@@ -7133,6 +7133,36 @@ async fn slash_mcp_requests_inventory_via_app_server() {
 }
 
 #[tokio::test]
+async fn slash_recording_status_requests_app_server_read() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::RecordingStatus);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::FetchScreenRecordingStatus));
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
+async fn slash_recording_pause_requests_app_server_pause() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::RecordingPause);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::PauseScreenRecording));
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
+async fn slash_recording_resume_requests_app_server_resume() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::RecordingResume);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::ResumeScreenRecording));
+    assert!(op_rx.try_recv().is_err(), "expected no core op to be sent");
+}
+
+#[tokio::test]
 async fn slash_memory_update_reports_stubbed_feature() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
 

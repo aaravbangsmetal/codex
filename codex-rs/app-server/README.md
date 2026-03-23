@@ -176,12 +176,16 @@ Example with notification opt-out:
 - `mcpServerStatus/list` — enumerate configured MCP servers with their tools, resources, resource templates, and auth status; supports cursor+limit pagination.
 - `windowsSandbox/setupStart` — start Windows sandbox setup for the selected mode (`elevated` or `unelevated`); accepts an optional absolute `cwd` to target setup for a specific workspace, returns `{ started: true }` immediately, and later emits `windowsSandbox/setupCompleted`.
 - `feedback/upload` — submit a feedback report (classification + optional reason/logs, conversation_id, and optional `extraLogFiles` attachments array); returns the tracking thread id.
-- `config/read` — fetch the effective config on disk after resolving config layering.
+- `config/read` — fetch the effective config on disk after resolving config layering. With `experimentalApi: true`, this can include the experimental `recording.screen.enabled` config surface. Screen recording still also requires `features.screen_recording = true`.
 - `externalAgentConfig/detect` — detect migratable external-agent artifacts with `includeHome` and optional `cwds`; each detected item includes `cwd` (`null` for home).
 - `externalAgentConfig/import` — apply selected external-agent migration items by passing explicit `migrationItems` with `cwd` (`null` for home).
 - `config/value/write` — write a single config key/value to the user's config.toml on disk.
 - `config/batchWrite` — apply multiple config edits atomically to the user's config.toml on disk, with optional `reloadUserConfig: true` to hot-reload loaded threads.
 - `configRequirements/read` — fetch loaded requirements constraints from `requirements.toml` and/or MDM (or `null` if none are configured), including allow-lists (`allowedApprovalPolicies`, `allowedSandboxModes`, `allowedWebSearchModes`), pinned feature values (`featureRequirements`), `enforceResidency`, and `network` constraints.
+- `recording/screen/read` — read the current screen recording status (experimental). This returns `disabled` status when the `screen_recording` feature flag is off.
+- `recording/screen/pause` — pause an enabled screen recording service without changing persistent config (experimental). This rejects when `features.screen_recording` is off.
+- `recording/screen/resume` — resume a paused screen recording service without changing persistent config (experimental). This rejects when `features.screen_recording` is off.
+- `recording/screen/status/updated` — notification emitted when screen recording status changes, including changes caused by config writes, runtime pause/resume, permission failures, or display topology changes (experimental).
 
 ### Example: Start or resume a thread
 
@@ -1402,6 +1406,11 @@ Notes:
 
 - If `capabilities` is omitted, `experimentalApi` is treated as `false`.
 - This setting is negotiated once at initialization time for the process lifetime (re-initializing is rejected with `"Already initialized"`).
+- Screen recording uses this gate for both `recording/screen/*` methods and the experimental `config/read.recording` field.
+- `features.screen_recording` is the coarse rollout/availability gate.
+- `recording.screen.enabled` is the persistent user opt-in bit.
+- App-server records only when both are true. Turning the feature off stops capture immediately but does not rewrite `recording.screen.enabled`, so capture resumes automatically if the feature comes back on later.
+- Persistent enable/disable is controlled through config writes to `recording.screen.enabled`; there is no separate `recording/screen/enable` or `recording/screen/disable` RPC.
 
 ### What happens without opt-in
 

@@ -1,6 +1,10 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
+    "AbsolutePathBuf": {
+      "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
+      "type": "string"
+    },
     "AccountLoginCompletedNotification": {
       "properties": {
         "error": {
@@ -1950,6 +1954,103 @@
         }
       ]
     },
+    "ScreenRecordingBackend": {
+      "enum": [
+        "xcap"
+      ],
+      "type": "string"
+    },
+    "ScreenRecordingPermission": {
+      "enum": [
+        "unknown",
+        "notRequired",
+        "granted",
+        "denied",
+        "required"
+      ],
+      "type": "string"
+    },
+    "ScreenRecordingPlatform": {
+      "enum": [
+        "macos",
+        "windows",
+        "linux"
+      ],
+      "type": "string"
+    },
+    "ScreenRecordingState": {
+      "enum": [
+        "disabled",
+        "starting",
+        "running",
+        "paused",
+        "error",
+        "unsupported"
+      ],
+      "type": "string"
+    },
+    "ScreenRecordingStatus": {
+      "properties": {
+        "backend": {
+          "$ref": "#/definitions/ScreenRecordingBackend"
+        },
+        "captureFps": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "capturedDisplayCount": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "lastError": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "newestFrameAt": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "paused": {
+          "type": "boolean"
+        },
+        "permission": {
+          "$ref": "#/definitions/ScreenRecordingPermission"
+        },
+        "platform": {
+          "$ref": "#/definitions/ScreenRecordingPlatform"
+        },
+        "retentionHours": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/definitions/ScreenRecordingState"
+        },
+        "storagePath": {
+          "$ref": "#/definitions/AbsolutePathBuf"
+        }
+      },
+      "required": [
+        "backend",
+        "captureFps",
+        "capturedDisplayCount",
+        "paused",
+        "permission",
+        "platform",
+        "retentionHours",
+        "state",
+        "storagePath"
+      ],
+      "type": "object"
+    },
     "ServerRequestResolvedNotification": {
       "properties": {
         "requestId": {
@@ -3008,112 +3109,6 @@
         "data",
         "numChannels",
         "sampleRate"
-      ],
-      "type": "object"
-    },
-    "ThreadRealtimeClosedNotification": {
-      "description": "EXPERIMENTAL - emitted when thread realtime transport closes.",
-      "properties": {
-        "reason": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "threadId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "threadId"
-      ],
-      "type": "object"
-    },
-    "ThreadRealtimeErrorNotification": {
-      "description": "EXPERIMENTAL - emitted when thread realtime encounters an error.",
-      "properties": {
-        "message": {
-          "type": "string"
-        },
-        "threadId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "message",
-        "threadId"
-      ],
-      "type": "object"
-    },
-    "ThreadRealtimeItemAddedNotification": {
-      "description": "EXPERIMENTAL - raw non-audio thread realtime item emitted by the backend.",
-      "properties": {
-        "item": true,
-        "threadId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "item",
-        "threadId"
-      ],
-      "type": "object"
-    },
-    "ThreadRealtimeOutputAudioDeltaNotification": {
-      "description": "EXPERIMENTAL - streamed output audio emitted by thread realtime.",
-      "properties": {
-        "audio": {
-          "$ref": "#/definitions/ThreadRealtimeAudioChunk"
-        },
-        "threadId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "audio",
-        "threadId"
-      ],
-      "type": "object"
-    },
-    "ThreadRealtimeStartedNotification": {
-      "description": "EXPERIMENTAL - emitted when thread realtime startup is accepted.",
-      "properties": {
-        "sessionId": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "threadId": {
-          "type": "string"
-        },
-        "version": {
-          "$ref": "#/definitions/RealtimeConversationVersion"
-        }
-      },
-      "required": [
-        "threadId",
-        "version"
-      ],
-      "type": "object"
-    },
-    "ThreadRealtimeTranscriptUpdatedNotification": {
-      "description": "EXPERIMENTAL - flat transcript delta emitted whenever realtime transcript text changes.",
-      "properties": {
-        "role": {
-          "type": "string"
-        },
-        "text": {
-          "type": "string"
-        },
-        "threadId": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "role",
-        "text",
-        "threadId"
       ],
       "type": "object"
     },
@@ -4572,126 +4567,6 @@
         "params"
       ],
       "title": "FuzzyFileSearch/sessionCompletedNotification",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "method": {
-          "enum": [
-            "thread/realtime/started"
-          ],
-          "title": "Thread/realtime/startedNotificationMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/ThreadRealtimeStartedNotification"
-        }
-      },
-      "required": [
-        "method",
-        "params"
-      ],
-      "title": "Thread/realtime/startedNotification",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "method": {
-          "enum": [
-            "thread/realtime/itemAdded"
-          ],
-          "title": "Thread/realtime/itemAddedNotificationMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/ThreadRealtimeItemAddedNotification"
-        }
-      },
-      "required": [
-        "method",
-        "params"
-      ],
-      "title": "Thread/realtime/itemAddedNotification",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "method": {
-          "enum": [
-            "thread/realtime/transcriptUpdated"
-          ],
-          "title": "Thread/realtime/transcriptUpdatedNotificationMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/ThreadRealtimeTranscriptUpdatedNotification"
-        }
-      },
-      "required": [
-        "method",
-        "params"
-      ],
-      "title": "Thread/realtime/transcriptUpdatedNotification",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "method": {
-          "enum": [
-            "thread/realtime/outputAudio/delta"
-          ],
-          "title": "Thread/realtime/outputAudio/deltaNotificationMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/ThreadRealtimeOutputAudioDeltaNotification"
-        }
-      },
-      "required": [
-        "method",
-        "params"
-      ],
-      "title": "Thread/realtime/outputAudio/deltaNotification",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "method": {
-          "enum": [
-            "thread/realtime/error"
-          ],
-          "title": "Thread/realtime/errorNotificationMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/ThreadRealtimeErrorNotification"
-        }
-      },
-      "required": [
-        "method",
-        "params"
-      ],
-      "title": "Thread/realtime/errorNotification",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "method": {
-          "enum": [
-            "thread/realtime/closed"
-          ],
-          "title": "Thread/realtime/closedNotificationMethod",
-          "type": "string"
-        },
-        "params": {
-          "$ref": "#/definitions/ThreadRealtimeClosedNotification"
-        }
-      },
-      "required": [
-        "method",
-        "params"
-      ],
-      "title": "Thread/realtime/closedNotification",
       "type": "object"
     },
     {

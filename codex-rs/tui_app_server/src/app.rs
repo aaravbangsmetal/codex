@@ -4,6 +4,7 @@ use crate::app_command::AppCommandView;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
 use crate::app_event::RealtimeAudioDeviceKind;
+use crate::app_event::ScreenRecordingAction;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
@@ -60,6 +61,10 @@ use codex_app_server_protocol::PluginListResponse;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::ScreenRecordingPauseResponse;
+use codex_app_server_protocol::ScreenRecordingReadResponse;
+use codex_app_server_protocol::ScreenRecordingResumeResponse;
+use codex_app_server_protocol::ScreenRecordingStatus;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::SkillsListResponse;
@@ -1804,6 +1809,21 @@ impl App {
         });
     }
 
+    fn run_screen_recording_action(
+        &mut self,
+        app_server: &AppServerSession,
+        action: ScreenRecordingAction,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = run_screen_recording_action(request_handle, action)
+                .await
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::ScreenRecordingLoaded { action, result });
+        });
+    }
+
     fn fetch_plugins_list(&mut self, app_server: &AppServerSession, cwd: PathBuf) {
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
@@ -1860,6 +1880,42 @@ impl App {
             .add_to_history(history_cell::new_mcp_tools_output_from_statuses(
                 &config, &statuses,
             ));
+    }
+
+    fn handle_screen_recording_result(
+        &mut self,
+        action: ScreenRecordingAction,
+        result: Result<ScreenRecordingStatus, String>,
+    ) {
+        match result {
+            Ok(status) => {
+                let message = match action {
+                    ScreenRecordingAction::Read => {
+                        format!(
+                            "Screen recording status: {}",
+                            format_screen_recording_status(&status)
+                        )
+                    }
+                    ScreenRecordingAction::Pause => {
+                        format!(
+                            "Screen recording paused. {}",
+                            format_screen_recording_status(&status)
+                        )
+                    }
+                    ScreenRecordingAction::Resume => {
+                        format!(
+                            "Screen recording resumed. {}",
+                            format_screen_recording_status(&status)
+                        )
+                    }
+                };
+                self.chat_widget.add_info_message(message, /*hint*/ None);
+            }
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Screen recording request failed: {err}"));
+            }
+        }
     }
 
     fn clear_committed_mcp_inventory_loading(&mut self) {
@@ -3579,6 +3635,18 @@ impl App {
             AppEvent::McpInventoryLoaded { result } => {
                 self.handle_mcp_inventory_result(result);
             }
+            AppEvent::FetchScreenRecordingStatus => {
+                self.run_screen_recording_action(app_server, ScreenRecordingAction::Read);
+            }
+            AppEvent::PauseScreenRecording => {
+                self.run_screen_recording_action(app_server, ScreenRecordingAction::Pause);
+            }
+            AppEvent::ResumeScreenRecording => {
+                self.run_screen_recording_action(app_server, ScreenRecordingAction::Resume);
+            }
+            AppEvent::ScreenRecordingLoaded { action, result } => {
+                self.handle_screen_recording_result(action, result);
+            }
             AppEvent::StartFileSearch(query) => {
                 self.file_search.on_user_query(query);
             }
@@ -5131,6 +5199,62 @@ async fn fetch_plugin_detail(
         .request_typed(ClientRequest::PluginRead { request_id, params })
         .await
         .wrap_err("plugin/read failed in app-server TUI")
+}
+
+async fn run_screen_recording_action(
+    request_handle: AppServerRequestHandle,
+    action: ScreenRecordingAction,
+) -> Result<ScreenRecordingStatus> {
+    let request_id = RequestId::String(format!("screen-recording-{}", Uuid::new_v4()));
+    match action {
+        ScreenRecordingAction::Read => {
+            let response: ScreenRecordingReadResponse = request_handle
+                .request_typed(ClientRequest::ScreenRecordingRead {
+                    request_id,
+                    params: None,
+                })
+                .await
+                .wrap_err("recording/screen/read failed in app-server TUI")?;
+            Ok(response.status)
+        }
+        ScreenRecordingAction::Pause => {
+            let response: ScreenRecordingPauseResponse = request_handle
+                .request_typed(ClientRequest::ScreenRecordingPause {
+                    request_id,
+                    params: None,
+                })
+                .await
+                .wrap_err("recording/screen/pause failed in app-server TUI")?;
+            Ok(response.status)
+        }
+        ScreenRecordingAction::Resume => {
+            let response: ScreenRecordingResumeResponse = request_handle
+                .request_typed(ClientRequest::ScreenRecordingResume {
+                    request_id,
+                    params: None,
+                })
+                .await
+                .wrap_err("recording/screen/resume failed in app-server TUI")?;
+            Ok(response.status)
+        }
+    }
+}
+
+fn format_screen_recording_status(status: &ScreenRecordingStatus) -> String {
+    let newest_frame = status
+        .newest_frame_at
+        .map(|timestamp| timestamp.to_string())
+        .unwrap_or_else(|| "none".to_string());
+    let last_error = status.last_error.as_deref().unwrap_or("none");
+    format!(
+        "state={:?}, paused={}, permission={:?}, displays={}, newest_frame_at={}, path={}, last_error={last_error}",
+        status.state,
+        status.paused,
+        status.permission,
+        status.captured_display_count,
+        newest_frame,
+        status.storage_path.as_path().display(),
+    )
 }
 
 /// Convert flat `McpServerStatus` responses into the per-server maps used by the
