@@ -96,7 +96,7 @@ pub(crate) async fn handle_mcp_tool_call(
         arguments: arguments_value.clone(),
     };
 
-    let metadata = lookup_mcp_tool_metadata(
+    let metadata = lookup_qualified_mcp_tool_metadata(
         sess.as_ref(),
         turn_context.as_ref(),
         qualified_tool.name,
@@ -850,6 +850,23 @@ fn mcp_tool_approval_callsite_mode(
 }
 
 pub(crate) async fn lookup_mcp_tool_metadata(
+    sess: &Session,
+    turn_context: &TurnContext,
+    server: &str,
+    tool_name: &str,
+) -> Option<McpToolApprovalMetadata> {
+    lookup_qualified_mcp_tool_metadata(
+        sess,
+        turn_context,
+        tool_name,
+        /*qualified_tool_namespace*/ None,
+        server,
+        tool_name,
+    )
+    .await
+}
+
+async fn lookup_qualified_mcp_tool_metadata(
     sess: &Session,
     turn_context: &TurnContext,
     qualified_tool_name: &str,
