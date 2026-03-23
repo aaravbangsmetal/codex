@@ -69,6 +69,11 @@ struct GuardianReviewExecutionResult {
     session_healthy: bool,
 }
 
+/// Result of inspecting the cached trunk for a specific review request.
+///
+/// `Ready` may still contain a trunk whose reuse key no longer matches the current request when
+/// that older trunk is busy. Callers handle that case by forking instead of trying to replace a
+/// live session out from under an in-flight review.
 enum GuardianTrunkState {
     Ready(Arc<GuardianReviewSession>),
     NeedsSpawn,
@@ -110,11 +115,17 @@ impl Default for GuardianReviewSessionManager {
 
 #[derive(Default)]
 struct GuardianReviewSessionState {
+    /// Shared guardian session reused across sequential approvals.
     trunk: Option<Arc<GuardianReviewSession>>,
+    /// Forked sessions used only while a parallel review is in flight.
     active_forks: Vec<Arc<GuardianReviewSession>>,
     shutdown_started: bool,
 }
 
+/// Runtime state for one guardian sub-session.
+///
+/// The trunk persists across approvals, while forked sessions are short-lived and always shut down
+/// after the review that spawned them.
 struct GuardianReviewSession {
     codex: Codex,
     cancel_token: CancellationToken,
@@ -124,6 +135,11 @@ struct GuardianReviewSession {
     last_committed_rollout_items: Mutex<Option<Vec<RolloutItem>>>,
 }
 
+/// RAII cleanup for forked guardian sessions.
+///
+/// The normal path removes the fork from `active_forks` and disarms this guard explicitly. If the
+/// future is dropped early, the guard cleans up the fork in the background so shutdown does not
+/// leak a live sub-session.
 struct ForkReviewCleanup {
     state: Arc<Mutex<GuardianReviewSessionState>>,
     review_session: Option<Arc<GuardianReviewSession>>,
@@ -352,6 +368,8 @@ impl GuardianReviewSessionManager {
             Err(outcome) => return outcome,
         };
 
+        // A stale-but-busy trunk stays in place so the in-flight review can finish. New work forks
+        // instead of replacing the live session.
         if trunk.reuse_key != next_reuse_key {
             return self
                 .run_forked_review(
@@ -395,6 +413,10 @@ impl GuardianReviewSessionManager {
         }
     }
 
+    /// Best-effort eager initialization for the shared trunk.
+    ///
+    /// This path is intentionally conservative: it only fills an empty trunk slot and gives up if
+    /// another spawn is already in progress or if shutdown begins.
     async fn maybe_spawn_trunk_eagerly(
         &self,
         parent_session: &Arc<Session>,
@@ -403,7 +425,7 @@ impl GuardianReviewSessionManager {
         eager_init_cancel: &CancellationToken,
     ) {
         let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(&spawn_config);
-        let Ok(spawn_guard) = self.spawn_lock.try_lock() else {
+        let Ok(_spawn_guard) = self.spawn_lock.try_lock() else {
             return;
         };
 
@@ -452,6 +474,7 @@ impl GuardianReviewSessionManager {
         deadline: tokio::time::Instant,
         external_cancel: Option<&CancellationToken>,
     ) -> Result<Option<Arc<GuardianReviewSession>>, GuardianReviewSessionOutcome> {
+        // Fast path without waiting on the spawn lock.
         match self.prepare_trunk(next_reuse_key).await {
             GuardianTrunkState::Ready(trunk) => {
                 return Ok(Some(trunk));
@@ -460,6 +483,7 @@ impl GuardianReviewSessionManager {
             GuardianTrunkState::NeedsSpawn => {}
         }
 
+        // Serialize actual trunk creation so eager init and the first real review cannot race.
         let spawn_guard =
             match run_before_review_deadline(deadline, external_cancel, self.spawn_lock.lock())
                 .await
@@ -468,6 +492,8 @@ impl GuardianReviewSessionManager {
                 Err(outcome) => return Err(outcome),
             };
 
+        // Re-check after taking the lock because another task may have installed a trunk while we
+        // were waiting.
         match self.prepare_trunk(next_reuse_key).await {
             GuardianTrunkState::Ready(trunk) => {
                 drop(spawn_guard);
@@ -552,6 +578,8 @@ impl GuardianReviewSessionManager {
             return None;
         }
         if let Some(trunk) = state.trunk.as_ref() {
+            // Another task installed the trunk while this spawn was in flight, so prefer the
+            // already-cached trunk and retire the newly spawned duplicate in the background.
             let trunk = Arc::clone(trunk);
             drop(state);
             review_session.shutdown_in_background();
@@ -673,6 +701,8 @@ impl GuardianReviewSessionManager {
     }
 }
 
+/// Spawns a guardian sub-session under the caller's deadline/cancellation policy and normalizes
+/// the result into a small outcome enum shared by trunk and fork paths.
 async fn spawn_review_session_before_deadline(
     deadline: tokio::time::Instant,
     external_cancel: Option<&CancellationToken>,
@@ -714,6 +744,7 @@ async fn spawn_review_session_before_deadline(
     }
 }
 
+/// Converts shared spawn failures back into the public review outcome used by callers.
 fn review_outcome_from_spawn_outcome(
     outcome: GuardianReviewSessionSpawnOutcome,
 ) -> GuardianReviewSessionOutcome {
