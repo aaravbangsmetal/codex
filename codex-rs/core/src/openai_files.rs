@@ -375,7 +375,6 @@ pub(crate) async fn upload_local_file(
 }
 
 #[cfg(test)]
-#[cfg(test)]
 async fn download_file_to_managed_temp(
     config: &Config,
     auth: Option<&CodexAuth>,
