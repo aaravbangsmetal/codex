@@ -1887,6 +1887,7 @@ dependencies = [
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
+ "codex-rollout",
  "codex-secrets",
  "codex-shell-command",
  "codex-shell-escalation",
@@ -2465,6 +2466,28 @@ dependencies = [
  "urlencoding",
  "webbrowser",
  "which 8.0.0",
+]
+
+[[package]]
+name = "codex-rollout"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "codex-file-search",
+ "codex-login",
+ "codex-otel",
+ "codex-protocol",
+ "codex-state",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "time",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
