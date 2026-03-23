@@ -114,7 +114,7 @@ fn mask_property_schema(schema: &mut JsonValue, target: MaskTarget) {
             "Pass a local file path string. Codex will upload it before invoking the tool."
         }
         MaskTarget::Output => {
-            "This field returns a local temp file path after Codex auto-downloads supported OpenAI file handles."
+            "This field returns a file download result object. `localPath` is set on success; `error` explains why auto-download failed."
         }
     };
     if description.is_empty() {
@@ -129,15 +129,46 @@ fn mask_property_schema(schema: &mut JsonValue, target: MaskTarget) {
     object.insert("description".to_string(), JsonValue::String(description));
     if is_array {
         object.insert("type".to_string(), JsonValue::String("array".to_string()));
-        object.insert(
-            "items".to_string(),
+        let items = if matches!(target, MaskTarget::Output) {
+            masked_output_result_schema()
+        } else {
             serde_json::json!({
                 "type": "string"
-            }),
+            })
+        };
+        object.insert("items".to_string(), items);
+    } else if matches!(target, MaskTarget::Output) {
+        object.extend(
+            masked_output_result_schema()
+                .as_object()
+                .expect("output result schema object")
+                .clone(),
         );
     } else {
         object.insert("type".to_string(), JsonValue::String("string".to_string()));
     }
+}
+
+fn masked_output_result_schema() -> JsonValue {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "localPath": {
+                "type": ["string", "null"]
+            },
+            "error": {
+                "type": ["string", "null"]
+            },
+            "fileName": {
+                "type": ["string", "null"]
+            },
+            "mimeType": {
+                "type": ["string", "null"]
+            }
+        },
+        "required": ["localPath", "error", "fileName", "mimeType"],
+        "additionalProperties": false
+    })
 }
 
 #[cfg(test)]
@@ -219,8 +250,16 @@ mod tests {
                 "type": "object",
                 "properties": {
                     "outputFile": {
-                        "type": "string",
-                        "description": "This field returns a local temp file path after Codex auto-downloads supported OpenAI file handles."
+                        "type": "object",
+                        "properties": {
+                            "localPath": {"type": ["string", "null"]},
+                            "error": {"type": ["string", "null"]},
+                            "fileName": {"type": ["string", "null"]},
+                            "mimeType": {"type": ["string", "null"]}
+                        },
+                        "required": ["localPath", "error", "fileName", "mimeType"],
+                        "additionalProperties": false,
+                        "description": "This field returns a file download result object. `localPath` is set on success; `error` explains why auto-download failed."
                     }
                 }
             })

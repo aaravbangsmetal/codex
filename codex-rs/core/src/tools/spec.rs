@@ -1038,44 +1038,6 @@ fn create_view_image_tool(can_request_original_image_detail: bool) -> ToolSpec {
     })
 }
 
-fn create_download_openai_file_tool() -> ToolSpec {
-    let properties = BTreeMap::from([(
-        "file_id".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "OpenAI file identifier to download. Accepts either a bare `file_id` or `sediment://{file_id}`. Downloads into a Codex-managed temporary directory and returns the local temp path."
-                    .to_string(),
-            ),
-        },
-    )]);
-
-    ToolSpec::Function(ResponsesApiTool {
-        name: "download_openai_file".to_string(),
-        description: "Downloads an OpenAI file handle from Codex Apps MCP flows into a Codex-managed temporary directory. Use this with `sediment://{file_id}` values returned by tools when Codex did not auto-download them."
-            .to_string(),
-        strict: false,
-        defer_loading: None,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["file_id".to_string()]),
-            additional_properties: Some(false.into()),
-        },
-        output_schema: Some(serde_json::json!({
-            "type": "object",
-            "properties": {
-                "file_id": {"type": "string"},
-                "uri": {"type": "string"},
-                "file_name": {"type": "string"},
-                "mime_type": {"type": ["string", "null"]},
-                "destination_path": {"type": "string"},
-                "bytes_written": {"type": "number"}
-            },
-            "required": ["file_id", "uri", "file_name", "mime_type", "destination_path", "bytes_written"],
-            "additionalProperties": false
-        })),
-    })
-}
-
 fn create_collab_input_items_schema() -> JsonSchema {
     let properties = BTreeMap::from([
         (
@@ -2642,7 +2604,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
     use crate::tools::handlers::ArtifactsHandler;
     use crate::tools::handlers::CodeModeExecuteHandler;
     use crate::tools::handlers::CodeModeWaitHandler;
-    use crate::tools::handlers::DownloadOpenAiFileHandler;
     use crate::tools::handlers::DynamicToolHandler;
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::JsReplHandler;
@@ -3038,16 +2999,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
         config.code_mode_enabled,
     );
     builder.register_handler("view_image", view_image_handler);
-
-    if config.openai_file_bridge {
-        push_tool_spec(
-            &mut builder,
-            create_download_openai_file_tool(),
-            /*supports_parallel_tool_calls*/ true,
-            config.code_mode_enabled,
-        );
-        builder.register_handler("download_openai_file", Arc::new(DownloadOpenAiFileHandler));
-    }
 
     if config.artifact_tools {
         push_tool_spec(

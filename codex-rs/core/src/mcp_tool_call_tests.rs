@@ -298,6 +298,58 @@ async fn openai_file_result_rewrite_requires_feature_flag() {
 }
 
 #[tokio::test]
+async fn openai_file_result_rewrite_surfaces_download_error() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    let mut config = (*turn_context.config).clone();
+    let mut features = codex_features::Features::with_defaults();
+    features.enable(codex_features::Feature::AppsFileBridge);
+    config.features = features.into();
+    turn_context.config = Arc::new(config);
+
+    let result = CallToolResult {
+        content: Vec::new(),
+        structured_content: Some(serde_json::json!({
+            "outputFile": "sediment://file_123"
+        })),
+        is_error: None,
+        meta: None,
+    };
+    let metadata = McpToolApprovalMetadata {
+        annotations: None,
+        connector_id: Some("file_meta_test".to_string()),
+        connector_name: Some("File Meta Test".to_string()),
+        connector_description: None,
+        tool_title: None,
+        tool_description: None,
+        codex_apps_meta: None,
+        openai_file_params: Vec::new(),
+        openai_file_outputs: vec!["outputFile".to_string()],
+    };
+
+    let rewritten = rewrite_mcp_tool_result_for_openai_files(
+        &session,
+        &Arc::new(turn_context),
+        "call_123",
+        CODEX_APPS_MCP_SERVER_NAME,
+        result,
+        Some(&metadata),
+    )
+    .await;
+
+    assert_eq!(
+        rewritten.structured_content,
+        Some(serde_json::json!({
+            "outputFile": {
+                "localPath": serde_json::Value::Null,
+                "error": "chatgpt authentication is required to use OpenAI file storage",
+                "fileName": serde_json::Value::Null,
+                "mimeType": serde_json::Value::Null,
+            }
+        }))
+    );
+}
+
+#[tokio::test]
 async fn rewrite_single_argument_string_prefers_existing_local_file_over_bare_file_id() {
     use wiremock::Mock;
     use wiremock::MockServer;

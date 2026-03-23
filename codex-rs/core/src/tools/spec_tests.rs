@@ -339,8 +339,16 @@ fn mcp_tool_to_openai_tool_masks_apps_file_fields_with_bridge_flag() {
                     "type": "object",
                     "properties": {
                         "outputFile": {
-                            "type": "string",
-                            "description": "This field returns a local temp file path after Codex auto-downloads supported OpenAI file handles."
+                            "type": "object",
+                            "properties": {
+                                "localPath": {"type": ["string", "null"]},
+                                "error": {"type": ["string", "null"]},
+                                "fileName": {"type": ["string", "null"]},
+                                "mimeType": {"type": ["string", "null"]}
+                            },
+                            "required": ["localPath", "error", "fileName", "mimeType"],
+                            "additionalProperties": false,
+                            "description": "This field returns a file download result object. `localPath` is set on success; `error` explains why auto-download failed."
                         }
                     }
                 },
@@ -1703,38 +1711,6 @@ fn test_gpt_5_1_codex_max_unified_exec_web_search() {
             "close_agent",
         ],
     );
-}
-
-#[test]
-fn download_openai_file_requires_apps_file_bridge_feature_flag() {
-    let config = test_config();
-    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
-    let available_models = Vec::new();
-    let mut features = Features::with_defaults();
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
-    assert_lacks_tool_name(&tools, "download_openai_file");
-
-    features.enable(Feature::AppsFileBridge);
-    let tools_config = ToolsConfig::new(&ToolsConfigParams {
-        model_info: &model_info,
-        available_models: &available_models,
-        features: &features,
-        web_search_mode: Some(WebSearchMode::Cached),
-        session_source: SessionSource::Cli,
-        sandbox_policy: &SandboxPolicy::DangerFullAccess,
-        windows_sandbox_level: WindowsSandboxLevel::Disabled,
-    });
-    let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
-    assert_contains_tool_names(&tools, &["download_openai_file"]);
 }
 
 #[test]

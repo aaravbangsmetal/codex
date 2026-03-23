@@ -1112,7 +1112,7 @@ async fn rewrite_output_value_for_openai_files(
 ) {
     match value {
         serde_json::Value::String(file_ref) => {
-            if let Some(downloaded_path) = auto_download_openai_file_value(
+            *value = auto_download_openai_file_value(
                 sess,
                 turn_context,
                 auth,
@@ -1120,17 +1120,14 @@ async fn rewrite_output_value_for_openai_files(
                 file_ref,
                 remaining_budget,
             )
-            .await
-            {
-                *value = serde_json::Value::String(downloaded_path);
-            }
+            .await;
         }
         serde_json::Value::Array(values) => {
             for item in values.iter_mut() {
                 let Some(file_ref) = item.as_str() else {
                     continue;
                 };
-                if let Some(downloaded_path) = auto_download_openai_file_value(
+                *item = auto_download_openai_file_value(
                     sess,
                     turn_context,
                     auth,
@@ -1138,10 +1135,7 @@ async fn rewrite_output_value_for_openai_files(
                     file_ref,
                     remaining_budget,
                 )
-                .await
-                {
-                    *item = serde_json::Value::String(downloaded_path);
-                }
+                .await;
             }
         }
         _ => {}
@@ -1155,9 +1149,23 @@ async fn auto_download_openai_file_value(
     call_id: &str,
     file_ref: &str,
     remaining_budget: &mut u64,
-) -> Option<String> {
-    if !is_openai_file_uri(file_ref) || *remaining_budget == 0 {
-        return None;
+) -> serde_json::Value {
+    if !is_openai_file_uri(file_ref) {
+        return serde_json::json!({
+            "localPath": serde_json::Value::Null,
+            "error": "value was not a sediment:// OpenAI file handle",
+            "fileName": serde_json::Value::Null,
+            "mimeType": serde_json::Value::Null,
+        });
+    }
+
+    if *remaining_budget == 0 {
+        return serde_json::json!({
+            "localPath": serde_json::Value::Null,
+            "error": "auto-download budget exhausted",
+            "fileName": serde_json::Value::Null,
+            "mimeType": serde_json::Value::Null,
+        });
     }
 
     let max_bytes = (*remaining_budget).min(OPENAI_FILE_AUTO_DOWNLOAD_LIMIT_BYTES);
@@ -1173,11 +1181,21 @@ async fn auto_download_openai_file_value(
     {
         Ok(downloaded) => {
             *remaining_budget = (*remaining_budget).saturating_sub(downloaded.bytes_written);
-            Some(downloaded.destination_path.display().to_string())
+            serde_json::json!({
+                "localPath": downloaded.destination_path.display().to_string(),
+                "error": serde_json::Value::Null,
+                "fileName": downloaded.file_name,
+                "mimeType": downloaded.mime_type,
+            })
         }
         Err(error) => {
             tracing::debug!(error = %error, file_ref, "skipping OpenAI file auto-download");
-            None
+            serde_json::json!({
+                "localPath": serde_json::Value::Null,
+                "error": error.to_string(),
+                "fileName": serde_json::Value::Null,
+                "mimeType": serde_json::Value::Null,
+            })
         }
     }
 }
