@@ -5,10 +5,8 @@ use crate::client_common::tools::ToolSpec;
 use crate::config::AgentRoleConfig;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_connection_manager::ToolInfo;
-use crate::mcp_openai_file::declared_openai_file_outputs;
 use crate::mcp_openai_file::declared_openai_file_params;
 use crate::mcp_openai_file::mask_input_schema_for_model;
-use crate::mcp_openai_file::mask_output_schema_for_model;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::original_image_detail::can_request_original_image_detail;
 use crate::shell::Shell;
@@ -2425,7 +2423,7 @@ fn mcp_tool_to_openai_tool_parts(
     } = tool;
 
     let mut serialized_input_schema = serde_json::Value::Object(input_schema.as_ref().clone());
-    if openai_file_bridge_enabled && tool_info.server_name == CODEX_APPS_MCP_SERVER_NAME {
+    if openai_file_bridge_enabled && tool_info.supports_openai_file_bridge_capability {
         mask_input_schema_for_model(
             &mut serialized_input_schema,
             &declared_openai_file_params(tool_info.tool.meta.as_deref()),
@@ -2451,15 +2449,9 @@ fn mcp_tool_to_openai_tool_parts(
     // `type`, so we coerce/sanitize here for compatibility.
     sanitize_json_schema(&mut serialized_input_schema);
     let input_schema = serde_json::from_value::<JsonSchema>(serialized_input_schema)?;
-    let mut structured_content_schema = output_schema
+    let structured_content_schema = output_schema
         .map(|output_schema| serde_json::Value::Object(output_schema.as_ref().clone()))
         .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new()));
-    if openai_file_bridge_enabled && tool_info.server_name == CODEX_APPS_MCP_SERVER_NAME {
-        mask_output_schema_for_model(
-            &mut structured_content_schema,
-            &declared_openai_file_outputs(tool_info.tool.meta.as_deref()),
-        );
-    }
     let output_schema = Some(mcp_call_tool_result_output_schema(
         structured_content_schema,
     ));

@@ -204,6 +204,8 @@ pub(crate) struct ToolInfo {
     pub(crate) tool_name: String,
     pub(crate) tool_namespace: String,
     pub(crate) tool: Tool,
+    #[serde(default)]
+    pub(crate) supports_openai_file_bridge_capability: bool,
     pub(crate) connector_id: Option<String>,
     pub(crate) connector_name: Option<String>,
     #[serde(default)]
@@ -374,6 +376,7 @@ struct ManagedClient {
     tool_filter: ToolFilter,
     tool_timeout: Option<Duration>,
     server_supports_sandbox_state_capability: bool,
+    server_supports_openai_file_bridge_capability: bool,
     codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
 }
 
@@ -579,6 +582,19 @@ impl AsyncManagedClient {
 }
 
 pub const MCP_SANDBOX_STATE_CAPABILITY: &str = "codex/sandbox-state";
+pub const MCP_OPENAI_FILE_BRIDGE_CAPABILITY: &str = "codex/openai-file-bridge";
+
+fn server_supports_experimental_capability(
+    initialize_result: &rmcp::model::InitializeResult,
+    capability: &str,
+) -> bool {
+    initialize_result
+        .capabilities
+        .experimental
+        .as_ref()
+        .and_then(|experimental| experimental.get(capability))
+        .is_some()
+}
 
 /// Custom MCP request to push sandbox state updates.
 /// When used, the `params` field of the notification is [`SandboxState`].
@@ -845,6 +861,7 @@ impl McpConnectionManager {
             CODEX_APPS_MCP_SERVER_NAME,
             &managed_client.client,
             managed_client.tool_timeout,
+            managed_client.server_supports_openai_file_bridge_capability,
         )
         .await
         .with_context(|| {
@@ -1374,11 +1391,23 @@ async fn start_server_task(
         .await
         .map_err(StartupOutcomeError::from)?;
 
+    let server_supports_sandbox_state_capability =
+        server_supports_experimental_capability(&initialize_result, MCP_SANDBOX_STATE_CAPABILITY);
+    let server_supports_openai_file_bridge_capability = server_supports_experimental_capability(
+        &initialize_result,
+        MCP_OPENAI_FILE_BRIDGE_CAPABILITY,
+    );
+
     let list_start = Instant::now();
     let fetch_start = Instant::now();
-    let tools = list_tools_for_client_uncached(&server_name, &client, startup_timeout)
-        .await
-        .map_err(StartupOutcomeError::from)?;
+    let tools = list_tools_for_client_uncached(
+        &server_name,
+        &client,
+        startup_timeout,
+        server_supports_openai_file_bridge_capability,
+    )
+    .await
+    .map_err(StartupOutcomeError::from)?;
     emit_duration(
         MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC,
         fetch_start.elapsed(),
@@ -1398,18 +1427,13 @@ async fn start_server_task(
     }
     let tools = filter_tools(tools, &tool_filter);
 
-    let server_supports_sandbox_state_capability = initialize_result
-        .capabilities
-        .experimental
-        .as_ref()
-        .and_then(|exp| exp.get(MCP_SANDBOX_STATE_CAPABILITY))
-        .is_some();
     let managed = ManagedClient {
         client: Arc::clone(&client),
         tools,
         tool_timeout: Some(tool_timeout),
         tool_filter,
         server_supports_sandbox_state_capability,
+        server_supports_openai_file_bridge_capability,
         codex_apps_tools_cache_context,
     };
 
@@ -1584,6 +1608,7 @@ async fn list_tools_for_client_uncached(
     server_name: &str,
     client: &Arc<RmcpClient>,
     timeout: Option<Duration>,
+    supports_openai_file_bridge_capability: bool,
 ) -> Result<Vec<ToolInfo>> {
     let resp = client
         .list_tools_with_connector_ids(/*params*/ None, timeout)
@@ -1615,6 +1640,7 @@ async fn list_tools_for_client_uncached(
                 tool_name,
                 tool_namespace,
                 tool: tool_def,
+                supports_openai_file_bridge_capability,
                 connector_id: tool.connector_id,
                 connector_name,
                 plugin_display_names: Vec::new(),

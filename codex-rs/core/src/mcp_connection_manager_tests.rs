@@ -26,6 +26,7 @@ fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
             icons: None,
             meta: None,
         },
+        supports_openai_file_bridge_capability: false,
         connector_id: None,
         connector_name: None,
         plugin_display_names: Vec::new(),

@@ -78,11 +78,18 @@ fn codex_apps_file_bridge_tool() -> ToolInfo {
                 .clone(),
             )),
         },
+        supports_openai_file_bridge_capability: true,
         connector_id: Some("file_meta_test".to_string()),
         connector_name: Some("File Meta Test".to_string()),
         plugin_display_names: Vec::new(),
         connector_description: Some("TinyMCP file bridge test tool.".to_string()),
     }
+}
+
+fn codex_apps_file_bridge_tool_without_capability() -> ToolInfo {
+    let mut tool = codex_apps_file_bridge_tool();
+    tool.supports_openai_file_bridge_capability = false;
+    tool
 }
 
 fn tool_info(tool: rmcp::model::Tool) -> ToolInfo {
@@ -91,6 +98,7 @@ fn tool_info(tool: rmcp::model::Tool) -> ToolInfo {
         tool_name: tool.name.to_string(),
         tool_namespace: "server/".to_string(),
         tool,
+        supports_openai_file_bridge_capability: false,
         connector_id: None,
         connector_name: None,
         plugin_display_names: Vec::new(),
@@ -318,14 +326,63 @@ fn mcp_tool_to_openai_tool_masks_apps_file_fields_with_bridge_flag() {
                         "outputFile": {
                             "type": "object",
                             "properties": {
-                                "localPath": {"type": ["string", "null"]},
-                                "error": {"type": ["string", "null"]},
-                                "fileName": {"type": ["string", "null"]},
-                                "mimeType": {"type": ["string", "null"]}
-                            },
-                            "required": ["localPath", "error", "fileName", "mimeType"],
-                            "additionalProperties": false,
-                            "description": "This file was downloaded to the provided path. This is a temporary directory and you are free to move it and analyze as needed. If download fails, `error` explains why."
+                                "file_id": {"type": "string"}
+                            }
+                        }
+                    }
+                },
+                "isError": {
+                    "type": "boolean"
+                },
+                "_meta": {}
+            },
+            "required": ["content"],
+            "additionalProperties": false
+        }))
+    );
+}
+
+#[test]
+fn mcp_tool_to_openai_tool_does_not_mask_apps_file_fields_without_capability() {
+    let openai_tool = mcp_tool_to_openai_tool(
+        "mcp__codex_apps__echo_file_inputs".to_string(),
+        codex_apps_file_bridge_tool_without_capability(),
+        true,
+    )
+    .expect("convert tool");
+
+    assert_eq!(
+        serde_json::to_value(openai_tool.parameters).expect("serialize schema"),
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "file": {
+                    "type": "object",
+                    "properties": {
+                        "download_url": {"type": "string"},
+                        "file_id": {"type": "string"}
+                    }
+                }
+            }
+        })
+    );
+    assert_eq!(
+        openai_tool.output_schema,
+        Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "array",
+                    "items": {}
+                },
+                "structuredContent": {
+                    "type": "object",
+                    "properties": {
+                        "outputFile": {
+                            "type": "object",
+                            "properties": {
+                                "file_id": {"type": "string"}
+                            }
                         }
                     }
                 },
@@ -2033,6 +2090,7 @@ fn search_tool_description_lists_each_codex_apps_connector_once() {
                         "Create calendar event",
                         serde_json::json!({"type": "object"}),
                     ),
+                    supports_openai_file_bridge_capability: false,
                     connector_id: Some("calendar".to_string()),
                     connector_name: Some("Calendar".to_string()),
                     plugin_display_names: Vec::new(),
@@ -2052,6 +2110,7 @@ fn search_tool_description_lists_each_codex_apps_connector_once() {
                         "List calendar events",
                         serde_json::json!({"type": "object"}),
                     ),
+                    supports_openai_file_bridge_capability: false,
                     connector_id: Some("calendar".to_string()),
                     connector_name: Some("Calendar".to_string()),
                     plugin_display_names: Vec::new(),
@@ -2071,6 +2130,7 @@ fn search_tool_description_lists_each_codex_apps_connector_once() {
                         "Search email threads",
                         serde_json::json!({"type": "object"}),
                     ),
+                    supports_openai_file_bridge_capability: false,
                     connector_id: Some("gmail".to_string()),
                     connector_name: Some("Gmail".to_string()),
                     plugin_display_names: Vec::new(),
@@ -2084,6 +2144,7 @@ fn search_tool_description_lists_each_codex_apps_connector_once() {
                     tool_name: "echo".to_string(),
                     tool_namespace: "rmcp".to_string(),
                     tool: mcp_tool("echo", "Echo", serde_json::json!({"type": "object"})),
+                    supports_openai_file_bridge_capability: false,
                     connector_id: None,
                     connector_name: None,
                     plugin_display_names: Vec::new(),
@@ -2125,6 +2186,7 @@ fn search_tool_requires_model_capability_only() {
                 "Create calendar event",
                 serde_json::json!({"type": "object"}),
             ),
+            supports_openai_file_bridge_capability: false,
             connector_id: Some("calendar".to_string()),
             connector_name: Some("Calendar".to_string()),
             connector_description: None,
@@ -2254,6 +2316,7 @@ fn search_tool_description_falls_back_to_connector_name_without_description() {
                     "Create calendar event",
                     serde_json::json!({"type": "object"}),
                 ),
+                supports_openai_file_bridge_capability: false,
                 connector_id: Some("calendar".to_string()),
                 connector_name: Some("Calendar".to_string()),
                 plugin_display_names: Vec::new(),
@@ -2303,6 +2366,7 @@ fn search_tool_registers_namespaced_app_tool_aliases() {
                         "Create calendar event",
                         serde_json::json!({"type": "object"}),
                     ),
+                    supports_openai_file_bridge_capability: false,
                     connector_id: Some("calendar".to_string()),
                     connector_name: Some("Calendar".to_string()),
                     connector_description: None,
@@ -2320,6 +2384,7 @@ fn search_tool_registers_namespaced_app_tool_aliases() {
                         "List calendar events",
                         serde_json::json!({"type": "object"}),
                     ),
+                    supports_openai_file_bridge_capability: false,
                     connector_id: Some("calendar".to_string()),
                     connector_name: Some("Calendar".to_string()),
                     connector_description: None,

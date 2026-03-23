@@ -8,16 +8,11 @@ use crate::default_client::build_reqwest_client;
 use reqwest::StatusCode;
 use serde::Deserialize;
 use tokio::fs::File;
-use tokio::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
 
 pub(crate) const OPENAI_FILE_URI_PREFIX: &str = "sediment://";
-pub(crate) const META_OPENAI_FILE_OUTPUTS: &str = "openai/fileOutputs";
 pub(crate) const META_OPENAI_FILE_PARAMS: &str = "openai/fileParams";
 pub(crate) const OPENAI_FILE_UPLOAD_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
-pub(crate) const OPENAI_FILE_DOWNLOAD_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
-pub(crate) const OPENAI_FILE_AUTO_DOWNLOAD_LIMIT_BYTES: u64 = 128 * 1024 * 1024;
-pub(crate) const OPENAI_FILE_AUTO_DOWNLOAD_BUDGET_BYTES: u64 = 512 * 1024 * 1024;
 
 const OPENAI_FILE_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const OPENAI_FILE_USE_CASE: &str = "codex";
@@ -373,7 +368,8 @@ pub(crate) async fn upload_local_file(
     }
 }
 
-pub(crate) async fn download_file_to_managed_temp(
+#[cfg(test)]
+async fn download_file_to_managed_temp(
     config: &Config,
     auth: Option<&CodexAuth>,
     reference: &str,
@@ -664,7 +660,7 @@ mod tests {
             "sediment://file_123",
             "session-1",
             "call-1",
-            OPENAI_FILE_DOWNLOAD_LIMIT_BYTES,
+            512 * 1024 * 1024,
         )
         .await
         .expect("download succeeds");
@@ -747,7 +743,7 @@ mod tests {
             "sediment://file_123",
             "session-3",
             "call-3",
-            OPENAI_FILE_DOWNLOAD_LIMIT_BYTES,
+            512 * 1024 * 1024,
         )
         .await
         .expect("download succeeds");

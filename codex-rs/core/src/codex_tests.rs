@@ -401,6 +401,7 @@ fn make_mcp_tool(
             icons: None,
             meta: None,
         },
+        supports_openai_file_bridge_capability: false,
         connector_id: connector_id.map(str::to_string),
         connector_name: connector_name.map(str::to_string),
         plugin_display_names: Vec::new(),
