@@ -6,9 +6,11 @@ use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::openai_models::TruncationMode;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::protocol::TruncationPolicy as ProtocolTruncationPolicy;
-use codex_utils_string::truncate_middle_with_byte_budget;
-
-const APPROX_BYTES_PER_TOKEN: usize = 4;
+pub(crate) use codex_utils_string::approx_bytes_for_tokens;
+pub(crate) use codex_utils_string::approx_token_count;
+pub(crate) use codex_utils_string::approx_tokens_from_byte_count;
+use codex_utils_string::truncate_middle_chars;
+use codex_utils_string::truncate_middle_with_token_budget as truncate_with_token_budget;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TruncationPolicy {
@@ -88,9 +90,9 @@ pub(crate) fn formatted_truncate_text(content: &str, policy: TruncationPolicy) -
 
 pub(crate) fn truncate_text(content: &str, policy: TruncationPolicy) -> String {
     match policy {
-        TruncationPolicy::Bytes(_) => truncate_with_byte_estimate(content, policy),
-        TruncationPolicy::Tokens(_) => {
-            let (truncated, _) = truncate_with_token_budget(content, policy);
+        TruncationPolicy::Bytes(bytes) => truncate_middle_chars(content, bytes),
+        TruncationPolicy::Tokens(tokens) => {
+            let (truncated, _) = truncate_with_token_budget(content, tokens);
             truncated
         }
     }
@@ -202,84 +204,6 @@ pub(crate) fn truncate_function_output_items_with_policy(
     out
 }
 
-/// Truncate the middle of a UTF-8 string to at most `max_tokens` tokens,
-/// preserving the beginning and the end. Returns the possibly truncated string
-/// and `Some(original_token_count)` if truncation occurred; otherwise returns
-/// the original string and `None`.
-fn truncate_with_token_budget(s: &str, policy: TruncationPolicy) -> (String, Option<u64>) {
-    if s.is_empty() {
-        return (String::new(), None);
-    }
-    let max_tokens = policy.token_budget();
-
-    let byte_len = s.len();
-    if max_tokens > 0 && byte_len <= approx_bytes_for_tokens(max_tokens) {
-        return (s.to_string(), None);
-    }
-
-    let truncated = truncate_with_byte_estimate(s, policy);
-    let approx_total_usize = approx_token_count(s);
-    let approx_total = u64::try_from(approx_total_usize).unwrap_or(u64::MAX);
-    if truncated == s {
-        (truncated, None)
-    } else {
-        (truncated, Some(approx_total))
-    }
-}
-
-/// Truncate a string using a byte budget derived from the token budget, without
-/// performing any real tokenization. This keeps the logic purely byte-based and
-/// uses a bytes placeholder in the truncated output.
-fn truncate_with_byte_estimate(s: &str, policy: TruncationPolicy) -> String {
-    if s.is_empty() {
-        return String::new();
-    }
-
-    let Some(truncation) = truncate_middle_with_byte_budget(s, policy.byte_budget()) else {
-        return s.to_string();
-    };
-
-    let marker = format_truncation_marker(
-        policy,
-        removed_units_for_source(policy, truncation.removed_bytes, truncation.removed_chars),
-    );
-
-    truncation.into_string(&marker)
-}
-
-fn format_truncation_marker(policy: TruncationPolicy, removed_count: u64) -> String {
-    match policy {
-        TruncationPolicy::Tokens(_) => format!("…{removed_count} tokens truncated…"),
-        TruncationPolicy::Bytes(_) => format!("…{removed_count} chars truncated…"),
-    }
-}
-
-fn removed_units_for_source(
-    policy: TruncationPolicy,
-    removed_bytes: usize,
-    removed_chars: usize,
-) -> u64 {
-    match policy {
-        TruncationPolicy::Tokens(_) => approx_tokens_from_byte_count(removed_bytes),
-        TruncationPolicy::Bytes(_) => u64::try_from(removed_chars).unwrap_or(u64::MAX),
-    }
-}
-
-pub(crate) fn approx_token_count(text: &str) -> usize {
-    let len = text.len();
-    len.saturating_add(APPROX_BYTES_PER_TOKEN.saturating_sub(1)) / APPROX_BYTES_PER_TOKEN
-}
-
-pub(crate) fn approx_bytes_for_tokens(tokens: usize) -> usize {
-    tokens.saturating_mul(APPROX_BYTES_PER_TOKEN)
-}
-
-pub(crate) fn approx_tokens_from_byte_count(bytes: usize) -> u64 {
-    let bytes_u64 = bytes as u64;
-    bytes_u64.saturating_add((APPROX_BYTES_PER_TOKEN as u64).saturating_sub(1))
-        / (APPROX_BYTES_PER_TOKEN as u64)
-}
-
 pub(crate) fn approx_tokens_from_byte_count_i64(bytes: i64) -> i64 {
     if bytes <= 0 {
         return 0;
@@ -289,5 +213,5 @@ pub(crate) fn approx_tokens_from_byte_count_i64(bytes: i64) -> i64 {
 }
 
 #[cfg(test)]
-#[path = "truncate_tests.rs"]
+#[path = "output_truncation_tests.rs"]
 mod tests;
