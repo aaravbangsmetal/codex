@@ -547,7 +547,7 @@ jobs:
   tests:
     name: Tests — ${{ matrix.runner }} - ${{ matrix.target }}${{ matrix.remote_env == 'true' && ' (remote)' || '' }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: ${{ matrix.timeout_minutes || 30 }}
     needs: changed
     if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
     defaults:
@@ -590,6 +590,7 @@ jobs:
           - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             profile: dev
+            timeout_minutes: 45
             runs_on:
               group: codex-runners
               labels: codex-windows-arm64
