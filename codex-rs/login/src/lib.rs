@@ -1,4 +1,6 @@
 mod device_code_auth;
+mod dotenv_api_key;
+mod onboard_oauth_helper;
 mod pkce;
 mod server;
 
@@ -24,3 +26,11 @@ pub use codex_core::auth::login_with_api_key;
 pub use codex_core::auth::logout;
 pub use codex_core::auth::save_auth;
 pub use codex_core::token_data::TokenData;
+pub use dotenv_api_key::upsert_dotenv_api_key;
+pub use dotenv_api_key::validate_dotenv_target;
+pub use onboard_oauth_helper::ApiProvisionOptions;
+pub use onboard_oauth_helper::HelperError as OnboardOauthHelperError;
+pub use onboard_oauth_helper::PendingApiProvisioning;
+pub use onboard_oauth_helper::ProvisionedApiKey;
+pub use onboard_oauth_helper::run_from_env as run_onboard_oauth_helper_from_env;
+pub use onboard_oauth_helper::start_api_provisioning;
