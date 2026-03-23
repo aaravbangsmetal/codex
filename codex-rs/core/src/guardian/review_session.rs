@@ -447,62 +447,60 @@ impl GuardianReviewSessionManager {
         deadline: tokio::time::Instant,
         external_cancel: Option<&CancellationToken>,
     ) -> Result<GuardianTrunkState, GuardianReviewSessionOutcome> {
-        loop {
-            match self.prepare_trunk(next_reuse_key).await {
-                state @ (GuardianTrunkState::Ready(_) | GuardianTrunkState::ShutdownStarted) => {
-                    return Ok(state);
-                }
-                GuardianTrunkState::NeedsSpawn => {}
+        match self.prepare_trunk(next_reuse_key).await {
+            state @ (GuardianTrunkState::Ready(_) | GuardianTrunkState::ShutdownStarted) => {
+                return Ok(state);
             }
+            GuardianTrunkState::NeedsSpawn => {}
+        }
 
-            let spawn_guard =
-                match run_before_review_deadline(deadline, external_cancel, self.spawn_lock.lock())
-                    .await
-                {
-                    Ok(spawn_guard) => spawn_guard,
-                    Err(outcome) => return Err(outcome),
-                };
-
-            match self.prepare_trunk(next_reuse_key).await {
-                state @ (GuardianTrunkState::Ready(_) | GuardianTrunkState::ShutdownStarted) => {
-                    drop(spawn_guard);
-                    return Ok(state);
-                }
-                GuardianTrunkState::NeedsSpawn => {}
-            }
-
-            let spawn_cancel_token = CancellationToken::new();
-            let review_session = match run_before_review_deadline_with_cancel(
-                deadline,
-                external_cancel,
-                &spawn_cancel_token,
-                Box::pin(spawn_guardian_review_session(
-                    params,
-                    params.spawn_config.clone(),
-                    next_reuse_key.clone(),
-                    spawn_cancel_token.clone(),
-                    /*initial_history*/ None,
-                )),
-            )
-            .await
+        let spawn_guard =
+            match run_before_review_deadline(deadline, external_cancel, self.spawn_lock.lock())
+                .await
             {
-                Ok(Ok(review_session)) => Arc::new(review_session),
-                Ok(Err(err)) => {
-                    drop(spawn_guard);
-                    return Err(GuardianReviewSessionOutcome::Completed(Err(err)));
-                }
-                Err(outcome) => {
-                    drop(spawn_guard);
-                    return Err(outcome);
-                }
+                Ok(spawn_guard) => spawn_guard,
+                Err(outcome) => return Err(outcome),
             };
 
-            let trunk = self.install_spawned_trunk(review_session).await;
-            drop(spawn_guard);
-            match trunk {
-                Some(trunk) => return Ok(GuardianTrunkState::Ready(trunk)),
-                None => return Ok(GuardianTrunkState::ShutdownStarted),
+        match self.prepare_trunk(next_reuse_key).await {
+            state @ (GuardianTrunkState::Ready(_) | GuardianTrunkState::ShutdownStarted) => {
+                drop(spawn_guard);
+                return Ok(state);
             }
+            GuardianTrunkState::NeedsSpawn => {}
+        }
+
+        let spawn_cancel_token = CancellationToken::new();
+        let review_session = match run_before_review_deadline_with_cancel(
+            deadline,
+            external_cancel,
+            &spawn_cancel_token,
+            Box::pin(spawn_guardian_review_session(
+                params,
+                params.spawn_config.clone(),
+                next_reuse_key.clone(),
+                spawn_cancel_token.clone(),
+                /*initial_history*/ None,
+            )),
+        )
+        .await
+        {
+            Ok(Ok(review_session)) => Arc::new(review_session),
+            Ok(Err(err)) => {
+                drop(spawn_guard);
+                return Err(GuardianReviewSessionOutcome::Completed(Err(err)));
+            }
+            Err(outcome) => {
+                drop(spawn_guard);
+                return Err(outcome);
+            }
+        };
+
+        let trunk = self.install_spawned_trunk(review_session).await;
+        drop(spawn_guard);
+        match trunk {
+            Some(trunk) => Ok(GuardianTrunkState::Ready(trunk)),
+            None => Ok(GuardianTrunkState::ShutdownStarted),
         }
     }
 
