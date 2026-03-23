@@ -582,7 +582,7 @@ impl AsyncManagedClient {
 }
 
 pub const MCP_SANDBOX_STATE_CAPABILITY: &str = "codex/sandbox-state";
-pub const MCP_OPENAI_FILE_BRIDGE_CAPABILITY: &str = "codex/openai-file-bridge";
+pub const MCP_OPENAI_FILE_BRIDGE_CAPABILITY: &str = "openai/file-bridge";
 
 fn server_supports_experimental_capability(
     initialize_result: &rmcp::model::InitializeResult,
