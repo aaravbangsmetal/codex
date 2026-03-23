@@ -6546,20 +6546,17 @@ pub(crate) async fn built_tools(
         || app_tools
             .as_ref()
             .is_some_and(|tools| tools.len() < DIRECT_APP_TOOL_EXPOSURE_THRESHOLD);
-    if expose_app_tools_directly && let Some(app_tools) = app_tools.as_ref() {
-        mcp_tools.extend(app_tools.clone());
-    }
-    let app_tools = if expose_app_tools_directly {
-        None
-    } else {
-        app_tools
-    };
-
     Ok(Arc::new(ToolRouter::from_config(
         &turn_context.tools_config,
         ToolRouterParams {
-            mcp_tools: retain_openai_file_tool_meta_map(has_mcp_servers.then_some(mcp_tools)),
+            mcp_tools: has_mcp_servers.then(|| {
+                mcp_tools
+                    .into_iter()
+                    .map(|(name, tool)| (name, tool.tool))
+                    .collect()
+            }),
             app_tools: retain_openai_file_tool_meta_map(app_tools),
+            expose_app_tools_directly,
             discoverable_tools,
             dynamic_tools: turn_context.dynamic_tools.as_slice(),
         },

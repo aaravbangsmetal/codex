@@ -2356,6 +2356,22 @@ pub(crate) fn mcp_tool_to_openai_tool(
     })
 }
 
+fn plain_mcp_tool_to_openai_tool(
+    fully_qualified_name: String,
+    tool: rmcp::model::Tool,
+) -> Result<ResponsesApiTool, serde_json::Error> {
+    let (description, input_schema, output_schema) = plain_mcp_tool_to_openai_tool_parts(tool)?;
+
+    Ok(ResponsesApiTool {
+        name: fully_qualified_name,
+        description,
+        strict: false,
+        defer_loading: None,
+        parameters: input_schema,
+        output_schema,
+    })
+}
+
 pub(crate) fn mcp_tool_to_deferred_openai_tool(
     name: String,
     tool_info: &ToolInfo,
@@ -2444,6 +2460,30 @@ fn mcp_tool_to_openai_tool_parts(
             &declared_openai_file_outputs(tool_info.tool.meta.as_deref()),
         );
     }
+    let output_schema = Some(mcp_call_tool_result_output_schema(
+        structured_content_schema,
+    ));
+    let description = description.map(Into::into).unwrap_or_default();
+
+    Ok((description, input_schema, output_schema))
+}
+
+fn plain_mcp_tool_to_openai_tool_parts(
+    tool: rmcp::model::Tool,
+) -> Result<(String, JsonSchema, Option<JsonValue>), serde_json::Error> {
+    let rmcp::model::Tool {
+        description,
+        input_schema,
+        output_schema,
+        ..
+    } = tool;
+
+    let mut serialized_input_schema = serde_json::Value::Object(input_schema.as_ref().clone());
+    sanitize_json_schema(&mut serialized_input_schema);
+    let input_schema = serde_json::from_value::<JsonSchema>(serialized_input_schema)?;
+    let structured_content_schema = output_schema
+        .map(|output_schema| serde_json::Value::Object(output_schema.as_ref().clone()))
+        .unwrap_or_else(|| JsonValue::Object(serde_json::Map::new()));
     let output_schema = Some(mcp_call_tool_result_output_schema(
         structured_content_schema,
     ));
@@ -2586,17 +2626,25 @@ fn sanitize_json_schema(value: &mut JsonValue) {
 #[cfg(test)]
 pub(crate) fn build_specs(
     config: &ToolsConfig,
-    mcp_tools: Option<HashMap<String, ToolInfo>>,
+    mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
     app_tools: Option<HashMap<String, ToolInfo>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
-    build_specs_with_discoverable_tools(config, mcp_tools, app_tools, None, dynamic_tools)
+    build_specs_with_discoverable_tools(
+        config,
+        mcp_tools,
+        app_tools,
+        /*expose_app_tools_directly*/ false,
+        None,
+        dynamic_tools,
+    )
 }
 
 pub(crate) fn build_specs_with_discoverable_tools(
     config: &ToolsConfig,
-    mcp_tools: Option<HashMap<String, ToolInfo>>,
+    mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
     app_tools: Option<HashMap<String, ToolInfo>>,
+    expose_app_tools_directly: bool,
     discoverable_tools: Option<Vec<DiscoverableTool>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
@@ -2661,6 +2709,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
             &nested_config,
             mcp_tools.clone(),
             app_tools.clone(),
+            expose_app_tools_directly,
             /*discoverable_tools*/ None,
             dynamic_tools,
         )
@@ -2827,7 +2876,32 @@ pub(crate) fn build_specs_with_discoverable_tools(
         builder.register_handler("request_permissions", request_permissions_handler);
     }
 
+    if expose_app_tools_directly && let Some(app_tools) = app_tools.as_ref() {
+        let mut entries: Vec<(String, ToolInfo)> = app_tools.clone().into_iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+        for (name, tool_info) in entries {
+            match mcp_tool_to_openai_tool(name.clone(), tool_info, config.openai_file_bridge) {
+                Ok(converted_tool) => {
+                    push_tool_spec(
+                        &mut builder,
+                        ToolSpec::Function(converted_tool),
+                        /*supports_parallel_tool_calls*/ false,
+                        config.code_mode_enabled,
+                    );
+                    builder.register_handler(name, mcp_handler.clone());
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to convert {name:?} direct app tool to OpenAI tool: {e:?}"
+                    );
+                }
+            }
+        }
+    }
+
     if config.search_tool
+        && !expose_app_tools_directly
         && let Some(app_tools) = app_tools
     {
         let search_tool_handler = Arc::new(ToolSearchHandler::new(
@@ -3077,15 +3151,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
     }
 
     if let Some(mcp_tools) = mcp_tools {
-        let mut entries: Vec<(String, ToolInfo)> = mcp_tools.into_iter().collect();
+        let mut entries: Vec<(String, rmcp::model::Tool)> = mcp_tools.into_iter().collect();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
 
-        for (name, tool_info) in entries.into_iter() {
-            match mcp_tool_to_openai_tool(
-                name.clone(),
-                tool_info.clone(),
-                config.openai_file_bridge,
-            ) {
+        for (name, tool) in entries {
+            match plain_mcp_tool_to_openai_tool(name.clone(), tool) {
                 Ok(converted_tool) => {
                     push_tool_spec(
                         &mut builder,

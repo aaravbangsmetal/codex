@@ -98,33 +98,10 @@ fn tool_info(tool: rmcp::model::Tool) -> ToolInfo {
     }
 }
 
-fn tool_info_for_name(qualified_name: &str, tool: rmcp::model::Tool) -> ToolInfo {
-    let server_name = qualified_name
-        .split_once('/')
-        .map(|(server_name, _)| server_name.to_string())
-        .unwrap_or_else(|| "server".to_string());
-    ToolInfo {
-        server_name,
-        tool_name: tool.name.to_string(),
-        tool_namespace: qualified_name.to_string(),
-        tool,
-        connector_id: None,
-        connector_name: None,
-        plugin_display_names: Vec::new(),
-        connector_description: None,
-    }
-}
-
 fn mcp_tools_map<const N: usize>(
     entries: [(String, rmcp::model::Tool); N],
-) -> HashMap<String, ToolInfo> {
-    entries
-        .into_iter()
-        .map(|(qualified_name, tool)| {
-            let tool_info = tool_info_for_name(&qualified_name, tool);
-            (qualified_name, tool_info)
-        })
-        .collect()
+) -> HashMap<String, rmcp::model::Tool> {
+    entries.into_iter().collect()
 }
 
 fn discoverable_connector(id: &str, name: &str, description: &str) -> DiscoverableTool {
@@ -1271,6 +1248,7 @@ fn assert_model_tools(
         ToolRouterParams {
             mcp_tools: None,
             app_tools: None,
+            expose_app_tools_directly: false,
             discoverable_tools: None,
             dynamic_tools: &[],
         },
@@ -2203,6 +2181,7 @@ fn tool_suggest_is_not_registered_without_feature_flag() {
         &tools_config,
         None,
         None,
+        /*expose_app_tools_directly*/ false,
         Some(vec![discoverable_connector(
             "connector_2128aebfecb84f64a069897515042a44",
             "Google Calendar",
@@ -2400,6 +2379,7 @@ fn tool_suggest_description_lists_discoverable_tools() {
         &tools_config,
         None,
         None,
+        /*expose_app_tools_directly*/ false,
         Some(discoverable_tools),
         &[],
     )

@@ -2,16 +2,14 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::auth::CodexAuth;
+use crate::config::Config;
+use crate::default_client::build_reqwest_client;
 use reqwest::StatusCode;
 use serde::Deserialize;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
-use uuid::Uuid;
-
-use crate::auth::CodexAuth;
-use crate::config::Config;
-use crate::default_client::build_reqwest_client;
 
 pub(crate) const OPENAI_FILE_URI_PREFIX: &str = "sediment://";
 pub(crate) const META_OPENAI_FILE_OUTPUTS: &str = "openai/fileOutputs";
@@ -507,10 +505,6 @@ pub(crate) fn managed_download_dir(
             path: parent,
             source,
         })
-}
-
-pub(crate) fn unique_manual_download_scope() -> String {
-    format!("manual/{}", Uuid::new_v4())
 }
 
 fn ensure_chatgpt_auth(auth: Option<&CodexAuth>) -> Result<&CodexAuth, OpenAiFileError> {
