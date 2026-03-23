@@ -11,6 +11,7 @@ use chrono::Utc;
 use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::models::BaseInstructions;
+use codex_utils_string::truncate_middle_chars;
 use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::FormatItem;
@@ -146,9 +147,9 @@ fn sanitize_rollout_item_for_persistence(
     match item {
         RolloutItem::EventMsg(EventMsg::ExecCommandEnd(mut event)) => {
             // Persist only a bounded aggregated summary of command output.
-            event.aggregated_output = truncate_text(
+            event.aggregated_output = truncate_middle_chars(
                 &event.aggregated_output,
-                TruncationPolicy::Bytes(PERSISTED_EXEC_AGGREGATED_OUTPUT_MAX_BYTES),
+                PERSISTED_EXEC_AGGREGATED_OUTPUT_MAX_BYTES,
             );
             // Drop unnecessary fields from rollout storage since aggregated_output is all we need.
             event.stdout.clear();

@@ -14,7 +14,6 @@ pub mod recorder;
 pub mod session_index;
 
 mod path_utils;
-mod truncate;
 
 pub(crate) mod default_client {
     pub use codex_login::default_client::*;
