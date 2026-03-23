@@ -127,6 +127,7 @@ pub mod shell;
 pub mod shell_snapshot;
 pub mod skills;
 pub mod spawn;
+#[path = "state_db_bridge.rs"]
 pub mod state_db;
 mod thread_rollout_truncation;
 mod tools;

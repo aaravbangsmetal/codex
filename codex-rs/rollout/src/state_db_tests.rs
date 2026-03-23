@@ -1,5 +1,5 @@
 use super::*;
-use crate::rollout::list::parse_cursor;
+use crate::list::parse_cursor;
 use chrono::DateTime;
 use chrono::NaiveDateTime;
 use chrono::Timelike;

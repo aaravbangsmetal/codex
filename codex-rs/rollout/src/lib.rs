@@ -5,6 +5,7 @@ use std::sync::LazyLock;
 use codex_protocol::protocol::SessionSource;
 
 pub mod config;
+#[path = "state_db.rs"]
 pub mod db;
 pub mod list;
 pub mod metadata;
