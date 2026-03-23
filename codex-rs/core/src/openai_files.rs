@@ -8,6 +8,8 @@ use crate::default_client::build_reqwest_client;
 use reqwest::StatusCode;
 use serde::Deserialize;
 use tokio::fs::File;
+#[cfg(test)]
+use tokio::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
 
 pub(crate) const OPENAI_FILE_URI_PREFIX: &str = "sediment://";
@@ -38,6 +40,7 @@ pub(crate) struct UploadedOpenAiFile {
     pub(crate) path: PathBuf,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DownloadedOpenAiFile {
     pub(crate) file_id: String,
@@ -76,6 +79,7 @@ pub(crate) enum OpenAiFileError {
         size_bytes: u64,
         limit_bytes: u64,
     },
+    #[cfg(test)]
     #[error(
         "file `{file_id}` is too large to download automatically: {size_bytes} bytes exceeds the limit of {limit_bytes} bytes"
     )]
@@ -108,12 +112,14 @@ pub(crate) enum OpenAiFileError {
     UploadNotReady { file_id: String },
     #[error("OpenAI file upload for `{file_id}` failed: {message}")]
     UploadFailed { file_id: String, message: String },
+    #[cfg(test)]
     #[error("failed to create temp directory `{path}`: {source}")]
     CreateDirectory {
         path: PathBuf,
         #[source]
         source: std::io::Error,
     },
+    #[cfg(test)]
     #[error("failed to write downloaded file to `{path}`: {source}")]
     WriteFile {
         path: PathBuf,
@@ -369,6 +375,7 @@ pub(crate) async fn upload_local_file(
 }
 
 #[cfg(test)]
+#[cfg(test)]
 async fn download_file_to_managed_temp(
     config: &Config,
     auth: Option<&CodexAuth>,
@@ -478,12 +485,14 @@ async fn download_file_to_managed_temp(
     })
 }
 
+#[cfg(test)]
 pub(crate) fn managed_download_root_for_session(session_id: &str) -> PathBuf {
     std::env::temp_dir()
         .join("codex-openai-files")
         .join(sanitize_download_file_name(session_id))
 }
 
+#[cfg(test)]
 pub(crate) fn managed_download_dir(
     session_id: &str,
     scope: &str,
@@ -530,6 +539,7 @@ fn authorized_request(
     Ok(request)
 }
 
+#[cfg(test)]
 fn sanitize_download_file_name(file_name: &str) -> String {
     let sanitized: String = file_name
         .chars()

@@ -1497,6 +1497,7 @@ impl Session {
             ),
             InitialHistory::New | InitialHistory::Forked(_) => None,
         };
+
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
         // - initialize RolloutRecorder with new or resumed session info
