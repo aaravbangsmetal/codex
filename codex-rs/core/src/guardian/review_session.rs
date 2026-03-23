@@ -79,10 +79,21 @@ pub(crate) struct GuardianReviewSessionParams {
     pub(crate) external_cancel: Option<CancellationToken>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(crate) struct GuardianReviewSessionManager {
     state: Arc<Mutex<GuardianReviewSessionState>>,
     spawn_lock: Arc<Mutex<()>>,
+    eager_init_cancel: CancellationToken,
+}
+
+impl Default for GuardianReviewSessionManager {
+    fn default() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(GuardianReviewSessionState::default())),
+            spawn_lock: Arc::new(Mutex::new(())),
+            eager_init_cancel: CancellationToken::new(),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -254,9 +265,10 @@ impl GuardianReviewSessionManager {
         parent_turn: Arc<TurnContext>,
     ) {
         let manager = self.clone();
+        let eager_init_cancel = self.eager_init_cancel.clone();
         drop(tokio::spawn(async move {
             manager
-                .initialize_trunk_if_needed(parent_session, parent_turn)
+                .initialize_trunk_if_needed(parent_session, parent_turn, eager_init_cancel)
                 .await;
         }));
     }
@@ -265,21 +277,23 @@ impl GuardianReviewSessionManager {
         &self,
         parent_session: Arc<Session>,
         parent_turn: Arc<TurnContext>,
+        eager_init_cancel: CancellationToken,
     ) {
         if !self.prepare_trunk_for_eager_init().await {
             return;
         }
 
-        let resolved =
-            match resolve_guardian_review_config(parent_session.as_ref(), parent_turn.as_ref())
-                .await
-            {
-                Ok(resolved) => resolved,
-                Err(err) => {
-                    warn!("failed to resolve guardian review config: {err}");
-                    return;
-                }
-            };
+        let resolved = tokio::select! {
+            _ = eager_init_cancel.cancelled() => return,
+            resolved = resolve_guardian_review_config(parent_session.as_ref(), parent_turn.as_ref()) => resolved,
+        };
+        let resolved = match resolved {
+            Ok(resolved) => resolved,
+            Err(err) => {
+                warn!("failed to resolve guardian review config: {err}");
+                return;
+            }
+        };
         let params = GuardianReviewSessionParams {
             parent_session,
             parent_turn: Arc::clone(&parent_turn),
@@ -290,10 +304,12 @@ impl GuardianReviewSessionManager {
             reasoning_effort: resolved.reasoning_effort,
             external_cancel: None,
         };
-        self.maybe_prepare_trunk_eagerly(&params).await;
+        self.maybe_prepare_trunk_eagerly(&params, &eager_init_cancel)
+            .await;
     }
 
     pub(crate) async fn shutdown(&self) {
+        self.eager_init_cancel.cancel();
         let (review_session, active_forks) = {
             let mut state = self.state.lock().await;
             state.shutdown_started = true;
@@ -393,7 +409,11 @@ impl GuardianReviewSessionManager {
         }
     }
 
-    async fn maybe_prepare_trunk_eagerly(&self, params: &GuardianReviewSessionParams) {
+    async fn maybe_prepare_trunk_eagerly(
+        &self,
+        params: &GuardianReviewSessionParams,
+        eager_init_cancel: &CancellationToken,
+    ) {
         let next_reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(&params.spawn_config);
         if !self.prepare_trunk_for_eager_init().await {
             return;
@@ -411,7 +431,7 @@ impl GuardianReviewSessionManager {
         let spawn_cancel_token = CancellationToken::new();
         let review_session = match run_before_review_deadline_with_cancel(
             tokio::time::Instant::now() + GUARDIAN_EAGER_INIT_SPAWN_TIMEOUT,
-            /*external_cancel*/ None,
+            Some(eager_init_cancel),
             &spawn_cancel_token,
             Box::pin(spawn_guardian_review_session(
                 params,
@@ -1157,7 +1177,9 @@ mod tests {
             spawn_config: spawn_config.clone(),
         };
 
-        manager.maybe_prepare_trunk_eagerly(&params).await;
+        manager
+            .maybe_prepare_trunk_eagerly(&params, &manager.eager_init_cancel)
+            .await;
 
         let trunk = manager
             .state
@@ -1167,6 +1189,23 @@ mod tests {
             .clone()
             .expect("existing trunk should be preserved");
         assert!(Arc::ptr_eq(&trunk, &trunk_session));
+    }
+
+    #[tokio::test]
+    async fn canceled_eager_trunk_init_does_not_cache_trunk() {
+        let manager = GuardianReviewSessionManager::default();
+        manager.eager_init_cancel.cancel();
+
+        let (parent_session, parent_turn) = crate::codex::make_session_and_context().await;
+        manager
+            .initialize_trunk_if_needed(
+                Arc::new(parent_session),
+                Arc::new(parent_turn),
+                manager.eager_init_cancel.clone(),
+            )
+            .await;
+
+        assert!(manager.state.lock().await.trunk.is_none());
     }
 
     #[tokio::test]
