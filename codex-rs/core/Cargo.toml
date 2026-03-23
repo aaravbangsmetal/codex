@@ -40,7 +40,6 @@ codex-login = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-skills = { workspace = true }
 codex-execpolicy = { workspace = true }
-codex-file-search = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-hooks = { workspace = true }
 codex-network-proxy = { workspace = true }
@@ -94,12 +93,6 @@ similar = { workspace = true }
 tempfile = { workspace = true }
 test-log = { workspace = true }
 thiserror = { workspace = true }
-time = { workspace = true, features = [
-    "formatting",
-    "parsing",
-    "local-offset",
-    "macros",
-] }
 tokio = { workspace = true, features = [
     "io-std",
     "macros",
