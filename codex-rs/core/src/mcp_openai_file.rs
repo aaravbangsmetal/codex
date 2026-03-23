@@ -111,10 +111,10 @@ fn mask_property_schema(schema: &mut JsonValue, target: MaskTarget) {
         .unwrap_or_default();
     let guidance = match target {
         MaskTarget::Input => {
-            "Pass a local file path string. Codex will upload it before invoking the tool."
+            "This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here."
         }
         MaskTarget::Output => {
-            "This field returns a file download result object. `localPath` is set on success; `error` explains why auto-download failed."
+            "This file was downloaded to the provided path. This is a temporary directory and you are free to move it and analyze as needed. If download fails, `error` explains why."
         }
     };
     if description.is_empty() {
@@ -219,12 +219,12 @@ mod tests {
                 "properties": {
                     "file": {
                         "type": "string",
-                        "description": "Original file payload. Pass a local file path string. Codex will upload it before invoking the tool."
+                        "description": "Original file payload. This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here."
                     },
                     "files": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Pass a local file path string. Codex will upload it before invoking the tool."
+                        "description": "This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here."
                     }
                 }
             })
@@ -259,7 +259,7 @@ mod tests {
                         },
                         "required": ["localPath", "error", "fileName", "mimeType"],
                         "additionalProperties": false,
-                        "description": "This field returns a file download result object. `localPath` is set on success; `error` explains why auto-download failed."
+                        "description": "This file was downloaded to the provided path. This is a temporary directory and you are free to move it and analyze as needed. If download fails, `error` explains why."
                     }
                 }
             })

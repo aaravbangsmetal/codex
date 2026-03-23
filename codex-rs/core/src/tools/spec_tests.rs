@@ -298,7 +298,7 @@ fn mcp_tool_to_openai_tool_masks_apps_file_fields_with_bridge_flag() {
             "properties": {
                 "file": {
                     "type": "string",
-                    "description": "Pass a local file path string. Codex will upload it before invoking the tool."
+                    "description": "This parameter expects an absolute local file path. If you want to upload a file, provide the absolute path to that file here."
                 }
             }
         })
@@ -325,7 +325,7 @@ fn mcp_tool_to_openai_tool_masks_apps_file_fields_with_bridge_flag() {
                             },
                             "required": ["localPath", "error", "fileName", "mimeType"],
                             "additionalProperties": false,
-                            "description": "This field returns a file download result object. `localPath` is set on success; `error` explains why auto-download failed."
+                            "description": "This file was downloaded to the provided path. This is a temporary directory and you are free to move it and analyze as needed. If download fails, `error` explains why."
                         }
                     }
                 },
