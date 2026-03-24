@@ -154,9 +154,7 @@ fn assemble_truncated_output(prefix: &str, suffix: &str, marker: &str) -> String
 
 #[cfg(test)]
 mod tests {
-    use super::split_string;
-    use super::truncate_middle_chars;
-    use super::truncate_middle_with_token_budget;
+    use super::*;
     use pretty_assertions::assert_eq;
 
     #[test]
