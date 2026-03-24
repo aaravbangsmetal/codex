@@ -14,33 +14,36 @@ use codex_protocol::protocol::SessionSource;
 pub use codex_state::LogEntry;
 use codex_state::ThreadMetadataBuilder;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::LazyLock;
+use std::sync::Mutex as StdMutex;
+use std::sync::Weak;
 use tracing::warn;
 use uuid::Uuid;
 
 /// Core-facing handle to the SQLite-backed state runtime.
 pub type StateDbHandle = Arc<codex_state::StateRuntime>;
 
+#[derive(Clone)]
+struct CachedStateDb {
+    default_provider: String,
+    runtime: Weak<codex_state::StateRuntime>,
+}
+
+static STATE_DB_CACHE: LazyLock<StdMutex<HashMap<PathBuf, CachedStateDb>>> =
+    LazyLock::new(|| StdMutex::new(HashMap::new()));
+
 /// Initialize the state runtime for thread state persistence and backfill checks. To only be used
 /// inside `core`. The initialization should not be done anywhere else.
 pub(crate) async fn init(config: &Config) -> Option<StateDbHandle> {
-    let runtime = match codex_state::StateRuntime::init(
-        config.sqlite_home.clone(),
-        config.model_provider_id.clone(),
+    let runtime = create_runtime(
+        config.sqlite_home.as_path(),
+        config.model_provider_id.as_str(),
     )
-    .await
-    {
-        Ok(runtime) => runtime,
-        Err(err) => {
-            warn!(
-                "failed to initialize state runtime at {}: {err}",
-                config.sqlite_home.display()
-            );
-            return None;
-        }
-    };
+    .await?;
     let backfill_state = match runtime.get_backfill_state().await {
         Ok(state) => state,
         Err(err) => {
@@ -67,12 +70,11 @@ pub async fn get_state_db(config: &Config) -> Option<StateDbHandle> {
     if !tokio::fs::try_exists(&state_path).await.unwrap_or(false) {
         return None;
     }
-    let runtime = codex_state::StateRuntime::init(
-        config.sqlite_home.clone(),
-        config.model_provider_id.clone(),
+    let runtime = get_or_init_runtime(
+        config.sqlite_home.as_path(),
+        config.model_provider_id.as_str(),
     )
-    .await
-    .ok()?;
+    .await?;
     require_backfill_complete(runtime, config.sqlite_home.as_path()).await
 }
 
@@ -84,11 +86,71 @@ pub async fn open_if_present(codex_home: &Path, default_provider: &str) -> Optio
     if !tokio::fs::try_exists(&db_path).await.unwrap_or(false) {
         return None;
     }
-    let runtime =
-        codex_state::StateRuntime::init(codex_home.to_path_buf(), default_provider.to_string())
-            .await
-            .ok()?;
+    let runtime = get_or_init_runtime(codex_home, default_provider).await?;
     require_backfill_complete(runtime, codex_home).await
+}
+
+fn cached_runtime(codex_home: &Path, default_provider: Option<&str>) -> Option<StateDbHandle> {
+    let mut cache = STATE_DB_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let cached = cache.get(codex_home)?.clone();
+    let runtime = match cached.runtime.upgrade() {
+        Some(runtime) => runtime,
+        None => {
+            cache.remove(codex_home);
+            return None;
+        }
+    };
+    if let Some(default_provider) = default_provider
+        && !default_provider.is_empty()
+        && !cached.default_provider.is_empty()
+        && cached.default_provider != default_provider
+    {
+        return None;
+    }
+    Some(runtime)
+}
+
+fn prune_stale_cached_runtimes(cache: &mut HashMap<PathBuf, CachedStateDb>) {
+    cache.retain(|_, cached| cached.runtime.strong_count() > 0);
+}
+
+async fn get_or_init_runtime(codex_home: &Path, default_provider: &str) -> Option<StateDbHandle> {
+    if let Some(runtime) = cached_runtime(codex_home, Some(default_provider)) {
+        return Some(runtime);
+    }
+    create_runtime(codex_home, default_provider).await
+}
+
+async fn create_runtime(codex_home: &Path, default_provider: &str) -> Option<StateDbHandle> {
+    let runtime = match codex_state::StateRuntime::init(
+        codex_home.to_path_buf(),
+        default_provider.to_string(),
+    )
+    .await
+    {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            warn!(
+                "failed to initialize state runtime at {}: {err}",
+                codex_home.display()
+            );
+            return None;
+        }
+    };
+    let mut cache = STATE_DB_CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    prune_stale_cached_runtimes(&mut cache);
+    cache.insert(
+        codex_home.to_path_buf(),
+        CachedStateDb {
+            default_provider: default_provider.to_string(),
+            runtime: Arc::downgrade(&runtime),
+        },
+    );
+    Some(runtime)
 }
 
 async fn require_backfill_complete(
