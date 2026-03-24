@@ -20,7 +20,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -y
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev libdrm-dev libgbm-dev libpipewire-0.3-dev libwayland-dev
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev libclang-dev libdbus-1-dev libdrm-dev libegl-dev libgbm-dev libpipewire-0.3-dev libwayland-dev libxcb1-dev libxrandr-dev
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
