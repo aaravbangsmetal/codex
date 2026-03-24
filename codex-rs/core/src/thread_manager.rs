@@ -635,7 +635,7 @@ impl ThreadManager {
     {
         let snapshot = snapshot.into();
         let source_thread = self.state.get_thread(source_thread_id).await?;
-        if let Some(path) = source_thread.rollout_path() {
+        if let Some(path) = source_thread.rollout_path().filter(|path| path.exists()) {
             return self
                 .fork_thread(
                     snapshot,
