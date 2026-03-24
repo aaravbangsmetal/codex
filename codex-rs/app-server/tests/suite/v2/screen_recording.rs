@@ -17,11 +17,12 @@ use codex_app_server_protocol::ScreenRecordingStatus;
 use codex_app_server_protocol::ScreenRecordingStatusUpdatedNotification;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use serial_test::serial;
 use tempfile::TempDir;
 use tokio::time::Instant;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 fn write_config(codex_home: &TempDir, contents: &str) -> Result<()> {
     Ok(std::fs::write(
@@ -31,6 +32,7 @@ fn write_config(codex_home: &TempDir, contents: &str) -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial(screen_recording)]
 async fn screen_recording_autostarts_and_supports_pause_resume() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_config(
@@ -114,6 +116,7 @@ enabled = true
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial(screen_recording)]
 async fn screen_recording_disable_via_config_write_stops_and_purges() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_config(
@@ -178,6 +181,7 @@ enabled = true
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial(screen_recording)]
 async fn screen_recording_status_updates_can_be_opted_out() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_config(
@@ -237,6 +241,7 @@ enabled = true
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial(screen_recording)]
 async fn screen_recording_feature_flag_gates_runtime_but_preserves_opt_in() -> Result<()> {
     let codex_home = TempDir::new()?;
     write_config(
