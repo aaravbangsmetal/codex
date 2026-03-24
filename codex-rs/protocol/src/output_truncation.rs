@@ -73,24 +73,22 @@ pub fn formatted_truncate_text_content_items_with_policy(
     items: &[FunctionCallOutputContentItem],
     policy: TruncationPolicy,
 ) -> (Vec<FunctionCallOutputContentItem>, Option<usize>) {
-    let text_segments = items
-        .iter()
-        .filter_map(|item| match item {
-            FunctionCallOutputContentItem::InputText { text } => Some(text.as_str()),
-            FunctionCallOutputContentItem::InputImage { .. } => None,
-        })
-        .collect::<Vec<_>>();
-
-    if text_segments.is_empty() {
-        return (items.to_vec(), None);
-    }
-
     let mut combined = String::new();
-    for text in &text_segments {
-        if !combined.is_empty() {
+    let mut saw_text_segment = false;
+    for item in items {
+        let FunctionCallOutputContentItem::InputText { text } = item else {
+            continue;
+        };
+
+        if saw_text_segment {
             combined.push('\n');
         }
         combined.push_str(text);
+        saw_text_segment = true;
+    }
+
+    if !saw_text_segment {
+        return (items.to_vec(), None);
     }
 
     if combined.len() <= policy.byte_budget() {
