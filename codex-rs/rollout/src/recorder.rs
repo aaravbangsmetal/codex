@@ -46,8 +46,6 @@ use crate::path_utils;
 use crate::state_db;
 use crate::state_db::StateDbHandle;
 use codex_git_utils::collect_git_info;
-use codex_protocol::output_truncation::TruncationPolicy;
-use codex_protocol::output_truncation::truncate_text;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::GitInfo as ProtocolGitInfo;
 use codex_protocol::protocol::InitialHistory;
