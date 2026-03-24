@@ -1,5 +1,5 @@
 #![allow(dead_code)]
-#![allow(unused_imports)]
+#![allow(unused)]
 
 use super::*;
 use base64::Engine;
