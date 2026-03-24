@@ -80,8 +80,6 @@ pub use codex_login::token_data;
 mod unified_exec;
 pub mod windows_sandbox;
 pub use client::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
-#[cfg(test)]
-pub(crate) use codex_protocol::output_truncation as truncate;
 pub use model_provider_info::DEFAULT_LMSTUDIO_PORT;
 pub use model_provider_info::DEFAULT_OLLAMA_PORT;
 pub use model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
