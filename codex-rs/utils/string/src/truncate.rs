@@ -151,7 +151,6 @@ fn assemble_truncated_output(prefix: &str, suffix: &str, marker: &str) -> String
 #[cfg(test)]
 mod tests {
     use super::approx_bytes_for_tokens;
-    use super::approx_token_count;
     use super::split_string;
     use super::truncate_middle_chars;
     use super::truncate_middle_with_token_budget;
