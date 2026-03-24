@@ -69,11 +69,11 @@ impl FfmpegSegmentEncoder {
         options.set("tune", "zerolatency");
         let encoder = video.open_with(options).map_err(std::io::Error::other)?;
 
-        let (stream_index, stream_time_base) = {
+        let stream_index = {
             let mut stream = output.add_stream(codec).map_err(std::io::Error::other)?;
             stream.set_time_base((1, fps as i32));
             stream.set_parameters(&encoder);
-            (stream.index(), stream.time_base())
+            stream.index()
         };
 
         let mut muxer_options = Dictionary::new();
@@ -81,6 +81,10 @@ impl FfmpegSegmentEncoder {
         output
             .write_header_with(muxer_options)
             .map_err(std::io::Error::other)?;
+        let stream_time_base = output
+            .stream(stream_index)
+            .ok_or_else(|| std::io::Error::other("encoded stream missing after header write"))?
+            .time_base();
 
         let scaler = scaling::context::Context::get(
             Pixel::RGBA,
