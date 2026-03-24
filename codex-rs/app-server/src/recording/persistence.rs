@@ -2,19 +2,15 @@ use super::backend::CaptureBackend;
 use super::backend::CaptureBackendFailure;
 use super::backend::CapturedDisplay;
 use super::backend::DisplayGeometry;
+use super::encoder::FfmpegSegmentEncoder;
 use chrono::DateTime;
 use chrono::Local;
 use chrono::Utc;
-use image::ColorType;
-use image::ImageEncoder;
-use image::codecs::jpeg::JpegEncoder;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
-use std::fs::File;
-use std::io::BufWriter;
 use std::path::Path;
 use std::path::PathBuf;
 use walkdir::WalkDir;
@@ -26,7 +22,7 @@ pub(crate) const SEGMENT_LENGTH_SECONDS: i64 = 30 * 60;
 pub(crate) const DISPLAY_REMOVAL_MISSED_TICKS: u32 = 3;
 const MANIFEST_FILE_NAME: &str = "manifest.json";
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub(crate) struct CaptureState {
     display_streams: HashMap<String, DisplayStream>,
     known_display_ids: HashSet<String>,
@@ -38,7 +34,6 @@ pub(crate) struct CaptureTickOutcome {
     pub(crate) newest_frame_at: Option<i64>,
 }
 
-#[derive(Debug)]
 struct DisplayStream {
     name: String,
     geometry: DisplayGeometry,
@@ -46,10 +41,10 @@ struct DisplayStream {
     segment: SegmentState,
 }
 
-#[derive(Debug)]
 struct SegmentState {
     directory: PathBuf,
     bucket_start_at: i64,
+    encoder: FfmpegSegmentEncoder,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,7 +87,7 @@ pub(crate) fn capture_tick(
     for display in displays {
         let stream = upsert_display_stream(storage_root, state, &display, captured_at)
             .map_err(|err| CaptureBackendFailure::other(err.to_string()))?;
-        write_frame(storage_root, stream, &display, captured_at)
+        write_frame(stream, &display, captured_at)
             .map_err(|err| CaptureBackendFailure::other(err.to_string()))?;
         newest_frame_at = Some(
             newest_frame_at
@@ -155,6 +150,7 @@ pub(crate) fn prune_old_segments(
         if newest_frame_at < cutoff
             && let Some(segment_dir) = manifest_path.parent()
         {
+            let _ = fs::remove_file(segment_dir.with_extension("mp4"));
             let _ = fs::remove_dir_all(segment_dir);
         }
     }
@@ -211,22 +207,13 @@ fn upsert_display_stream<'a>(
         stream.geometry = display.geometry;
         stream.missed_ticks = 0;
         if let Some(reason) = rotate_reason {
-            stream.segment = open_segment(
-                storage_root,
-                &display.id,
-                &display.name,
-                display.geometry,
-                captured_at,
-                reason,
-            )?;
+            stream.segment = open_segment(storage_root, display, captured_at, reason)?;
         }
     } else {
         state.known_display_ids.insert(display.id.clone());
         let segment = open_segment(
             storage_root,
-            &display.id,
-            &display.name,
-            display.geometry,
+            display,
             captured_at,
             rotate_reason.unwrap_or(SegmentReason::Started),
         )?;
@@ -251,62 +238,55 @@ fn upsert_display_stream<'a>(
 
 fn open_segment(
     storage_root: &Path,
-    display_id: &str,
-    display_name: &str,
-    geometry: DisplayGeometry,
+    display: &CapturedDisplay,
     captured_at: DateTime<Utc>,
     reason: SegmentReason,
 ) -> std::io::Result<SegmentState> {
     let local = captured_at.with_timezone(&Local);
     let bucket_start_at = bucket_start_at(captured_at);
-    let segment_dir = storage_root.join(format!(
-        "{}-display-{display_id}-{}",
+    let encoded_width = display.frame.width();
+    let encoded_height = display.frame.height();
+    let segment_name = format!(
+        "{}-display-{}-{}",
         local.format("%Y-%m-%dT%H-%M-%S"),
+        display.id,
         segment_reason_name(reason)
-    ));
+    );
+    let segment_dir = storage_root.join(&segment_name);
     fs::create_dir_all(&segment_dir)?;
     let manifest = SegmentManifest {
         version: 1,
-        display_id: display_id.to_string(),
-        display_name: display_name.to_string(),
-        width: geometry.width,
-        height: geometry.height,
-        rotation_millidegrees: geometry.rotation_millidegrees,
-        scale_factor_milli: geometry.scale_factor_milli,
+        display_id: display.id.clone(),
+        display_name: display.name.clone(),
+        width: encoded_width,
+        height: encoded_height,
+        rotation_millidegrees: display.geometry.rotation_millidegrees,
+        scale_factor_milli: display.geometry.scale_factor_milli,
         segment_started_at: captured_at.timestamp(),
         segment_reason: reason,
         frame_count: 0,
         newest_frame_at: None,
     };
     write_manifest(&segment_dir, &manifest)?;
+    let segment_path = storage_root.join(format!("{segment_name}.mp4"));
+    let encoder =
+        FfmpegSegmentEncoder::open(&segment_path, encoded_width, encoded_height, CAPTURE_FPS)?;
     Ok(SegmentState {
         directory: segment_dir,
         bucket_start_at,
+        encoder,
     })
 }
 
 fn write_frame(
-    _storage_root: &Path,
-    stream: &DisplayStream,
+    stream: &mut DisplayStream,
     display: &CapturedDisplay,
     captured_at: DateTime<Utc>,
 ) -> std::io::Result<()> {
-    let frame_path = stream
+    stream
         .segment
-        .directory
-        .join(format!("frame-{}.jpg", captured_at.timestamp_millis()));
-    let file = File::create(&frame_path)?;
-    let mut writer = BufWriter::new(file);
-    let rgb_frame = image::DynamicImage::ImageRgba8(display.frame.clone()).into_rgb8();
-    let encoder = JpegEncoder::new_with_quality(&mut writer, 85);
-    encoder
-        .write_image(
-            rgb_frame.as_raw(),
-            rgb_frame.width(),
-            rgb_frame.height(),
-            ColorType::Rgb8.into(),
-        )
-        .map_err(std::io::Error::other)?;
+        .encoder
+        .write_rgba_frame(display.frame.as_raw())?;
 
     let manifest_path = stream.segment.directory.join(MANIFEST_FILE_NAME);
     let manifest_bytes = fs::read(&manifest_path)?;
@@ -389,6 +369,19 @@ mod tests {
         }
     }
 
+    fn hidpi_display(
+        id: &str,
+        logical_width: u32,
+        logical_height: u32,
+        scale: u32,
+    ) -> CapturedDisplay {
+        let mut display = display(id, logical_width * scale, logical_height * scale);
+        display.geometry.width = logical_width;
+        display.geometry.height = logical_height;
+        display.geometry.scale_factor_milli = scale * 1000;
+        display
+    }
+
     #[test]
     fn hotplug_misses_are_debounced_for_three_ticks() {
         let tmp = TempDir::new().expect("tmpdir");
@@ -444,6 +437,68 @@ mod tests {
             .filter(|entry| entry.file_type().is_dir() && entry.depth() == 1)
             .count();
         assert_eq!(segment_count, 2);
+    }
+
+    #[test]
+    fn writes_mp4_segments_instead_of_jpeg_frames() {
+        let tmp = TempDir::new().expect("tmpdir");
+        let backend = SequenceBackend::new(vec![Ok(vec![display("1", 64, 48)])]);
+        let mut state = CaptureState::default();
+
+        capture_tick(
+            tmp.path(),
+            &mut state,
+            &backend,
+            DateTime::from_timestamp(1_700_000_000, 0).expect("timestamp"),
+        )
+        .expect("capture tick");
+
+        let mut mp4_files = WalkDir::new(tmp.path())
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry.file_type().is_file()
+                    && entry
+                        .path()
+                        .extension()
+                        .is_some_and(|extension| extension == "mp4")
+            })
+            .map(walkdir::DirEntry::into_path)
+            .collect::<Vec<_>>();
+        mp4_files.sort();
+
+        assert_eq!(mp4_files.len(), 1);
+        assert_eq!(mp4_files[0].parent(), Some(tmp.path()));
+        assert!(fs::metadata(&mp4_files[0]).expect("segment metadata").len() > 0);
+    }
+
+    #[test]
+    fn encodes_physical_frame_dimensions_on_hidpi_displays() {
+        let tmp = TempDir::new().expect("tmpdir");
+        let backend = SequenceBackend::new(vec![Ok(vec![hidpi_display("1", 64, 48, 2)])]);
+        let mut state = CaptureState::default();
+
+        capture_tick(
+            tmp.path(),
+            &mut state,
+            &backend,
+            DateTime::from_timestamp(1_700_000_000, 0).expect("timestamp"),
+        )
+        .expect("capture tick");
+
+        let manifest_path = WalkDir::new(tmp.path())
+            .into_iter()
+            .filter_map(Result::ok)
+            .find(|entry| entry.file_type().is_file() && entry.file_name() == MANIFEST_FILE_NAME)
+            .expect("manifest")
+            .into_path();
+        let manifest: SegmentManifest =
+            serde_json::from_slice(&fs::read(manifest_path).expect("read manifest"))
+                .expect("decode manifest");
+
+        assert_eq!(manifest.width, 128);
+        assert_eq!(manifest.height, 96);
+        assert_eq!(manifest.scale_factor_milli, 2000);
     }
 
     #[test]

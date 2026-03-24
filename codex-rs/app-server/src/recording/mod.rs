@@ -1,4 +1,5 @@
 mod backend;
+mod encoder;
 mod manager;
 mod persistence;
 
