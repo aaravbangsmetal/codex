@@ -1,11 +1,11 @@
 use crate::codex::Session;
 use crate::compact::content_items_to_text;
 use crate::event_mapping::is_contextual_user_message_content;
-use crate::output_truncation::TruncationPolicy;
-use crate::output_truncation::truncate_text;
 use chrono::Utc;
 use codex_git_utils::resolve_root_git_project_for_trust;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::output_truncation::TruncationPolicy;
+use codex_protocol::output_truncation::truncate_text;
 use codex_state::SortKey;
 use codex_state::ThreadMetadata;
 use dirs::home_dir;

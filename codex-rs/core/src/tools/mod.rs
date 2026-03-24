@@ -15,9 +15,9 @@ pub mod sandboxing;
 pub mod spec;
 
 use crate::exec::ExecToolCallOutput;
-use crate::output_truncation::TruncationPolicy;
-use crate::output_truncation::formatted_truncate_text;
-use crate::output_truncation::truncate_text;
+use codex_protocol::output_truncation::TruncationPolicy;
+use codex_protocol::output_truncation::formatted_truncate_text;
+use codex_protocol::output_truncation::truncate_text;
 pub use router::ToolRouter;
 use serde::Serialize;
 

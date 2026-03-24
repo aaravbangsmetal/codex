@@ -1,7 +1,5 @@
 use crate::exec::ExecToolCallOutput;
 use crate::network_policy_decision::NetworkPolicyDecisionPayload;
-use crate::output_truncation::TruncationPolicy;
-use crate::output_truncation::truncate_text;
 use crate::token_data::KnownPlan;
 use crate::token_data::PlanType;
 use chrono::DateTime;
@@ -12,6 +10,8 @@ use codex_async_utils::CancelErr;
 pub use codex_login::auth::RefreshTokenFailedError;
 pub use codex_login::auth::RefreshTokenFailedReason;
 use codex_protocol::ThreadId;
+use codex_protocol::output_truncation::TruncationPolicy;
+use codex_protocol::output_truncation::truncate_text;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::RateLimitSnapshot;

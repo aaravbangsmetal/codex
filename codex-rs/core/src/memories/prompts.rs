@@ -1,10 +1,10 @@
 use crate::memories::memory_root;
 use crate::memories::phase_one;
 use crate::memories::storage::rollout_summary_file_stem_from_parts;
-use crate::output_truncation::TruncationPolicy;
-use crate::output_truncation::truncate_text;
 use askama::Template;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::output_truncation::TruncationPolicy;
+use codex_protocol::output_truncation::truncate_text;
 use codex_state::Phase2InputSelection;
 use codex_state::Stage1Output;
 use codex_state::Stage1OutputRef;

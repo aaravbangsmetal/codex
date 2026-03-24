@@ -1,30 +1,14 @@
-//! Output-specific truncation helpers built on generic string truncation
-//! utilities.
+use std::ops::Mul;
 
-use codex_protocol::models::FunctionCallOutputContentItem;
-use codex_protocol::openai_models::TruncationMode;
-use codex_protocol::openai_models::TruncationPolicyConfig;
-use codex_protocol::protocol::TruncationPolicy as ProtocolTruncationPolicy;
-pub(crate) use codex_utils_string::approx_bytes_for_tokens;
-pub(crate) use codex_utils_string::approx_token_count;
-pub(crate) use codex_utils_string::approx_tokens_from_byte_count;
+use crate::models::FunctionCallOutputContentItem;
+use crate::openai_models::TruncationMode;
+use crate::openai_models::TruncationPolicyConfig;
+pub use crate::protocol::TruncationPolicy;
+pub use codex_utils_string::approx_bytes_for_tokens;
+pub use codex_utils_string::approx_token_count;
+pub use codex_utils_string::approx_tokens_from_byte_count;
 use codex_utils_string::truncate_middle_chars;
 use codex_utils_string::truncate_middle_with_token_budget;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum TruncationPolicy {
-    Bytes(usize),
-    Tokens(usize),
-}
-
-impl From<TruncationPolicy> for ProtocolTruncationPolicy {
-    fn from(value: TruncationPolicy) -> Self {
-        match value {
-            TruncationPolicy::Bytes(bytes) => Self::Bytes(bytes),
-            TruncationPolicy::Tokens(tokens) => Self::Tokens(tokens),
-        }
-    }
-}
 
 impl From<TruncationPolicyConfig> for TruncationPolicy {
     fn from(config: TruncationPolicyConfig) -> Self {
@@ -53,7 +37,7 @@ impl TruncationPolicy {
     }
 }
 
-impl std::ops::Mul<f64> for TruncationPolicy {
+impl Mul<f64> for TruncationPolicy {
     type Output = Self;
 
     fn mul(self, multiplier: f64) -> Self::Output {
@@ -68,7 +52,7 @@ impl std::ops::Mul<f64> for TruncationPolicy {
     }
 }
 
-pub(crate) fn formatted_truncate_text(content: &str, policy: TruncationPolicy) -> String {
+pub fn formatted_truncate_text(content: &str, policy: TruncationPolicy) -> String {
     if content.len() <= policy.byte_budget() {
         return content.to_string();
     }
@@ -78,14 +62,14 @@ pub(crate) fn formatted_truncate_text(content: &str, policy: TruncationPolicy) -
     format!("Total output lines: {total_lines}\n\n{result}")
 }
 
-pub(crate) fn truncate_text(content: &str, policy: TruncationPolicy) -> String {
+pub fn truncate_text(content: &str, policy: TruncationPolicy) -> String {
     match policy {
         TruncationPolicy::Bytes(bytes) => truncate_middle_chars(content, bytes),
         TruncationPolicy::Tokens(tokens) => truncate_middle_with_token_budget(content, tokens).0,
     }
 }
 
-pub(crate) fn formatted_truncate_text_content_items_with_policy(
+pub fn formatted_truncate_text_content_items_with_policy(
     items: &[FunctionCallOutputContentItem],
     policy: TruncationPolicy,
 ) -> (Vec<FunctionCallOutputContentItem>, Option<usize>) {
@@ -129,7 +113,7 @@ pub(crate) fn formatted_truncate_text_content_items_with_policy(
     (out, Some(approx_token_count(&combined)))
 }
 
-pub(crate) fn truncate_function_output_items_with_policy(
+pub fn truncate_function_output_items_with_policy(
     items: &[FunctionCallOutputContentItem],
     policy: TruncationPolicy,
 ) -> Vec<FunctionCallOutputContentItem> {
@@ -140,8 +124,8 @@ pub(crate) fn truncate_function_output_items_with_policy(
     };
     let mut omitted_text_items = 0usize;
 
-    for it in items {
-        match it {
+    for item in items {
+        match item {
             FunctionCallOutputContentItem::InputText { text } => {
                 if remaining_budget == 0 {
                     omitted_text_items += 1;
@@ -188,7 +172,7 @@ pub(crate) fn truncate_function_output_items_with_policy(
     out
 }
 
-pub(crate) fn approx_tokens_from_byte_count_i64(bytes: i64) -> i64 {
+pub fn approx_tokens_from_byte_count_i64(bytes: i64) -> i64 {
     if bytes <= 0 {
         return 0;
     }
@@ -204,7 +188,7 @@ mod tests {
     use super::approx_tokens_from_byte_count_i64;
     use super::formatted_truncate_text_content_items_with_policy;
     use super::truncate_function_output_items_with_policy;
-    use codex_protocol::models::FunctionCallOutputContentItem;
+    use crate::models::FunctionCallOutputContentItem;
     use pretty_assertions::assert_eq;
 
     fn text_item(text: &str) -> FunctionCallOutputContentItem {

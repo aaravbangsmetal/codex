@@ -1,6 +1,4 @@
 use super::*;
-use crate::output_truncation;
-use crate::output_truncation::TruncationPolicy;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_git_utils::GhostCommit;
@@ -18,6 +16,8 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::default_input_modalities;
+use codex_protocol::output_truncation;
+use codex_protocol::output_truncation::TruncationPolicy;
 use codex_protocol::protocol::InterAgentCommunication;
 use image::ImageBuffer;
 use image::ImageFormat;

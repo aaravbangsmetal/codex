@@ -1,8 +1,6 @@
 use crate::client_common::tools::ToolSearchOutputTool;
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::output_truncation::TruncationPolicy;
-use crate::output_truncation::formatted_truncate_text;
 use crate::tools::TELEMETRY_PREVIEW_MAX_BYTES;
 use crate::tools::TELEMETRY_PREVIEW_MAX_LINES;
 use crate::tools::TELEMETRY_PREVIEW_TRUNCATION_NOTICE;
@@ -16,6 +14,8 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::SearchToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
 use codex_protocol::models::function_call_output_content_items_to_text;
+use codex_protocol::output_truncation::TruncationPolicy;
+use codex_protocol::output_truncation::formatted_truncate_text;
 use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
