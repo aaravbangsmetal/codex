@@ -147,7 +147,7 @@ jobs:
         shell: bash
         run: |
           sudo DEBIAN_FRONTEND=noninteractive apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev libpipewire-0.3-dev
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev libdrm-dev libgbm-dev libpipewire-0.3-dev libwayland-dev
       - uses: dtolnay/rust-toolchain@1.93.0
         with:
           toolchain: nightly-2025-09-18
@@ -266,7 +266,7 @@ jobs:
           set -euo pipefail
           if command -v apt-get >/dev/null 2>&1; then
             sudo apt-get update -y
-            packages=(pkg-config libcap-dev libpipewire-0.3-dev)
+            packages=(pkg-config libcap-dev libdrm-dev libgbm-dev libpipewire-0.3-dev libwayland-dev)
             if [[ "${{ matrix.target }}" == 'x86_64-unknown-linux-musl' || "${{ matrix.target }}" == 'aarch64-unknown-linux-musl' ]]; then
               packages+=(libubsan1)
             fi
@@ -607,7 +607,7 @@ jobs:
           set -euo pipefail
           if command -v apt-get >/dev/null 2>&1; then
             sudo apt-get update -y
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev libpipewire-0.3-dev
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev libdrm-dev libgbm-dev libpipewire-0.3-dev libwayland-dev
           fi
 
       # Some integration tests rely on DotSlash being installed.

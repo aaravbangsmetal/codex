@@ -56,7 +56,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -y
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev libpipewire-0.3-dev
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev libdrm-dev libgbm-dev libpipewire-0.3-dev libwayland-dev
 
       - name: Set up Node.js for js_repl tests
         uses: actions/setup-node@v6
