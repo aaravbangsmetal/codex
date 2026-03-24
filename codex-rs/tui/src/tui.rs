@@ -298,19 +298,6 @@ impl Tui {
         )
     }
 
-    #[cfg(test)]
-    pub(crate) fn new_test() -> Self {
-        let terminal = CustomTerminal::with_test_options(
-            CrosstermBackend::new(stdout()),
-            ratatui::layout::Size {
-                width: 80,
-                height: 24,
-            },
-            ratatui::layout::Position { x: 0, y: 0 },
-        );
-        Self::from_terminal(terminal, false, None)
-    }
-
     /// Set whether alternate screen is enabled. When false, enter_alt_screen() becomes a no-op.
     pub fn set_alt_screen_enabled(&mut self, enabled: bool) {
         self.alt_screen_enabled = enabled;
@@ -567,5 +554,22 @@ impl Tui {
             }
         }
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+
+    pub(crate) fn new_test_tui() -> Tui {
+        let terminal = crate::custom_terminal::test_support::new_terminal(
+            CrosstermBackend::new(stdout()),
+            ratatui::layout::Size {
+                width: 80,
+                height: 24,
+            },
+            ratatui::layout::Position { x: 0, y: 0 },
+        );
+        Tui::from_terminal(terminal, false, None)
     }
 }

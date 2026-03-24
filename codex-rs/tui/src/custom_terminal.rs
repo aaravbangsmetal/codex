@@ -201,20 +201,6 @@ where
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn with_test_options(backend: B, screen_size: Size, cursor_pos: Position) -> Self {
-        Self {
-            backend,
-            buffers: [Buffer::empty(Rect::ZERO), Buffer::empty(Rect::ZERO)],
-            current: 0,
-            hidden_cursor: false,
-            viewport_area: Rect::ZERO,
-            last_known_screen_size: screen_size,
-            last_known_cursor_pos: cursor_pos,
-            visible_history_rows: 0,
-        }
-    }
-
     /// Get a Frame object which provides a consistent view into the terminal state for rendering.
     pub fn get_frame(&mut self) -> Frame<'_> {
         Frame {
@@ -508,6 +494,31 @@ where
     /// Queries the real size of the backend.
     pub fn size(&self) -> io::Result<Size> {
         self.backend.size()
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+
+    pub(crate) fn new_terminal<B>(
+        backend: B,
+        screen_size: Size,
+        cursor_pos: Position,
+    ) -> Terminal<B>
+    where
+        B: Backend + Write,
+    {
+        Terminal {
+            backend,
+            buffers: [Buffer::empty(Rect::ZERO), Buffer::empty(Rect::ZERO)],
+            current: 0,
+            hidden_cursor: false,
+            viewport_area: Rect::ZERO,
+            last_known_screen_size: screen_size,
+            last_known_cursor_pos: cursor_pos,
+            visible_history_rows: 0,
+        }
     }
 }
 

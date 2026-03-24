@@ -87,9 +87,7 @@ async fn start_btw_forks_switches_and_esc_returns_to_parent() -> Result<()> {
 
     app.handle_key_event(&mut tui, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
         .await;
-    assert_eq!(app.active_thread_id, Some(parent_thread_id));
-    assert_eq!(app.active_btw_parent_thread_id(), None);
-    assert!(!app.thread_event_channels.contains_key(&child_thread_id));
+    assert_returned_to_parent(&app, parent_thread_id, child_thread_id);
     Ok(())
 }
 
@@ -108,9 +106,7 @@ async fn start_btw_ctrl_c_returns_to_parent() -> Result<()> {
     )
     .await;
 
-    assert_eq!(app.active_thread_id, Some(parent_thread_id));
-    assert_eq!(app.active_btw_parent_thread_id(), None);
-    assert!(!app.thread_event_channels.contains_key(&child_thread_id));
+    assert_returned_to_parent(&app, parent_thread_id, child_thread_id);
     Ok(())
 }
 
@@ -149,7 +145,7 @@ async fn idle_main_thread_ctrl_c_requests_shutdown_exit() -> Result<()> {
     let mut tui = make_test_tui();
 
     let parent_thread_id = setup_btw_parent_thread(&mut app, None).await?;
-    while app_event_rx.try_recv().is_ok() {}
+    drain_app_events(&mut app_event_rx);
 
     app.handle_key_event(
         &mut tui,
@@ -157,16 +153,12 @@ async fn idle_main_thread_ctrl_c_requests_shutdown_exit() -> Result<()> {
     )
     .await;
 
-    let mut exit_mode = None;
-    while let Ok(app_event) = app_event_rx.try_recv() {
-        if let AppEvent::Exit(mode) = app_event {
-            exit_mode = Some(mode);
-            break;
-        }
-    }
     assert_eq!(app.active_thread_id, Some(parent_thread_id));
     assert_eq!(app.active_btw_parent_thread_id(), None);
-    assert_eq!(exit_mode, Some(ExitMode::ShutdownFirst));
+    assert_eq!(
+        next_exit_mode(&mut app_event_rx),
+        Some(ExitMode::ShutdownFirst)
+    );
     Ok(())
 }
 
@@ -177,7 +169,7 @@ async fn ctrl_c_after_returning_from_btw_requests_shutdown_exit() -> Result<()> 
 
     let parent_thread_id = setup_btw_parent_thread(&mut app, None).await?;
     let child_thread_id = start_btw_thread(&mut app, &mut tui, parent_thread_id).await?;
-    while app_event_rx.try_recv().is_ok() {}
+    drain_app_events(&mut app_event_rx);
 
     app.handle_key_event(
         &mut tui,
@@ -185,10 +177,8 @@ async fn ctrl_c_after_returning_from_btw_requests_shutdown_exit() -> Result<()> 
     )
     .await;
 
-    assert_eq!(app.active_thread_id, Some(parent_thread_id));
-    assert_eq!(app.active_btw_parent_thread_id(), None);
-    assert!(!app.thread_event_channels.contains_key(&child_thread_id));
-    while app_event_rx.try_recv().is_ok() {}
+    assert_returned_to_parent(&app, parent_thread_id, child_thread_id);
+    drain_app_events(&mut app_event_rx);
 
     app.handle_key_event(
         &mut tui,
@@ -196,14 +186,10 @@ async fn ctrl_c_after_returning_from_btw_requests_shutdown_exit() -> Result<()> 
     )
     .await;
 
-    let mut exit_mode = None;
-    while let Ok(app_event) = app_event_rx.try_recv() {
-        if let AppEvent::Exit(mode) = app_event {
-            exit_mode = Some(mode);
-            break;
-        }
-    }
-    assert_eq!(exit_mode, Some(ExitMode::ShutdownFirst));
+    assert_eq!(
+        next_exit_mode(&mut app_event_rx),
+        Some(ExitMode::ShutdownFirst)
+    );
     Ok(())
 }
 
@@ -212,9 +198,8 @@ async fn nested_btw_preserves_parent_chain_and_esc_returns_one_level() -> Result
     let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let mut tui = make_test_tui();
 
-    let parent_thread_id = setup_btw_parent_thread(&mut app, None).await?;
-    let child_thread_id = start_btw_thread(&mut app, &mut tui, parent_thread_id).await?;
-    let grandchild_thread_id = start_btw_thread(&mut app, &mut tui, child_thread_id).await?;
+    let (parent_thread_id, child_thread_id, grandchild_thread_id) =
+        start_nested_btw_chain(&mut app, &mut tui).await?;
 
     assert_eq!(app.active_thread_id, Some(grandchild_thread_id));
     assert_eq!(
@@ -246,11 +231,11 @@ async fn switching_away_from_nested_btw_discards_full_hidden_chain() -> Result<(
     let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let mut tui = make_test_tui();
 
-    let parent_thread_id = setup_btw_parent_thread(&mut app, None).await?;
-    let child_thread_id = start_btw_thread(&mut app, &mut tui, parent_thread_id).await?;
-    let grandchild_thread_id = start_btw_thread(&mut app, &mut tui, child_thread_id).await?;
+    let (parent_thread_id, child_thread_id, grandchild_thread_id) =
+        start_nested_btw_chain(&mut app, &mut tui).await?;
 
-    app.select_agent_thread(&mut tui, parent_thread_id).await?;
+    app.select_agent_thread_and_discard_btw_chain(&mut tui, parent_thread_id)
+        .await?;
 
     assert_eq!(app.active_thread_id, Some(parent_thread_id));
     assert_eq!(app.active_btw_parent_thread_id(), None);
@@ -269,9 +254,8 @@ async fn switching_away_from_nested_btw_clears_hidden_pending_approvals() -> Res
     let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
     let mut tui = make_test_tui();
 
-    let parent_thread_id = setup_btw_parent_thread(&mut app, None).await?;
-    let child_thread_id = start_btw_thread(&mut app, &mut tui, parent_thread_id).await?;
-    let _grandchild_thread_id = start_btw_thread(&mut app, &mut tui, child_thread_id).await?;
+    let (parent_thread_id, child_thread_id, _grandchild_thread_id) =
+        start_nested_btw_chain(&mut app, &mut tui).await?;
 
     {
         let child_channel = app
@@ -307,7 +291,8 @@ async fn switching_away_from_nested_btw_clears_hidden_pending_approvals() -> Res
         &[app.thread_label(child_thread_id)]
     );
 
-    app.select_agent_thread(&mut tui, parent_thread_id).await?;
+    app.select_agent_thread_and_discard_btw_chain(&mut tui, parent_thread_id)
+        .await?;
 
     assert!(app.chat_widget.pending_thread_approvals().is_empty());
     Ok(())
@@ -349,7 +334,8 @@ async fn failed_switch_from_btw_keeps_current_thread_and_parent_chain() -> Resul
     let child_thread_id = start_btw_thread(&mut app, &mut tui, parent_thread_id).await?;
     let missing_thread_id = ThreadId::new();
 
-    app.select_agent_thread(&mut tui, missing_thread_id).await?;
+    app.select_agent_thread_and_discard_btw_chain(&mut tui, missing_thread_id)
+        .await?;
 
     assert_eq!(app.active_thread_id, Some(child_thread_id));
     assert_eq!(app.active_btw_parent_thread_id(), Some(parent_thread_id));
@@ -469,4 +455,35 @@ async fn start_btw_thread(
     Ok(app
         .active_thread_id
         .expect("BTW child should be active after start"))
+}
+
+fn assert_returned_to_parent(app: &App, parent_thread_id: ThreadId, child_thread_id: ThreadId) {
+    assert_eq!(app.active_thread_id, Some(parent_thread_id));
+    assert_eq!(app.active_btw_parent_thread_id(), None);
+    assert!(!app.thread_event_channels.contains_key(&child_thread_id));
+}
+
+fn drain_app_events(app_event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>) {
+    while app_event_rx.try_recv().is_ok() {}
+}
+
+fn next_exit_mode(
+    app_event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) -> Option<ExitMode> {
+    while let Ok(app_event) = app_event_rx.try_recv() {
+        if let AppEvent::Exit(mode) = app_event {
+            return Some(mode);
+        }
+    }
+    None
+}
+
+async fn start_nested_btw_chain(
+    app: &mut App,
+    tui: &mut crate::tui::Tui,
+) -> Result<(ThreadId, ThreadId, ThreadId)> {
+    let parent_thread_id = setup_btw_parent_thread(app, None).await?;
+    let child_thread_id = start_btw_thread(app, tui, parent_thread_id).await?;
+    let grandchild_thread_id = start_btw_thread(app, tui, child_thread_id).await?;
+    Ok((parent_thread_id, child_thread_id, grandchild_thread_id))
 }

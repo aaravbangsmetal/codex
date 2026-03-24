@@ -64,7 +64,9 @@ impl App {
             && self.chat_widget.composer_is_empty()
             && let Some(parent_thread_id) = self.active_btw_parent_thread_id()
         {
-            let _ = self.select_agent_thread(tui, parent_thread_id).await;
+            let _ = self
+                .select_agent_thread_and_discard_btw_chain(tui, parent_thread_id)
+                .await;
             true
         } else {
             false
@@ -120,6 +122,21 @@ impl App {
             .and_then(|state| state.next_fork_banner_parent_label.take())
     }
 
+    pub(super) async fn select_agent_thread_and_discard_btw_chain(
+        &mut self,
+        tui: &mut tui::Tui,
+        thread_id: ThreadId,
+    ) -> Result<()> {
+        let btw_threads_to_discard = self.btw_threads_to_discard_after_switch(thread_id);
+        self.select_agent_thread(tui, thread_id).await?;
+        if self.active_thread_id == Some(thread_id) {
+            for btw_thread_id in btw_threads_to_discard {
+                self.discard_btw_thread(btw_thread_id).await;
+            }
+        }
+        Ok(())
+    }
+
     /// Shuts down and forgets one ephemeral BTW thread.
     ///
     /// This removes the thread from the core thread manager, aborts its listener task, clears any
@@ -136,38 +153,6 @@ impl App {
             self.refresh_pending_thread_approvals().await;
         }
         self.sync_active_agent_label();
-    }
-
-    async fn fork_banner_parent_label(&self, parent_thread_id: ThreadId) -> String {
-        if self.chat_widget.thread_id() == Some(parent_thread_id)
-            && let Some(thread_name) = self
-                .chat_widget
-                .thread_name()
-                .filter(|name| !name.trim().is_empty())
-        {
-            return thread_name;
-        }
-
-        if let Some(channel) = self.thread_event_channels.get(&parent_thread_id) {
-            let store = channel.store.lock().await;
-            if let Some(thread_name) =
-                match store.session_configured.as_ref().map(|event| &event.msg) {
-                    Some(EventMsg::SessionConfigured(session)) => session
-                        .thread_name
-                        .clone()
-                        .filter(|name| !name.trim().is_empty()),
-                    _ => None,
-                }
-            {
-                return thread_name;
-            }
-        }
-
-        if self.primary_thread_id == Some(parent_thread_id) {
-            "main thread".to_string()
-        } else {
-            self.thread_label(parent_thread_id)
-        }
     }
 
     pub(super) async fn handle_start_btw(
@@ -229,8 +214,36 @@ impl App {
         match fork_result {
             Ok(forked) => {
                 let child_thread_id = forked.thread_id;
-                let next_fork_banner_parent_label =
-                    Some(self.fork_banner_parent_label(parent_thread_id).await);
+                let default_parent_label = || {
+                    if self.primary_thread_id == Some(parent_thread_id) {
+                        "main thread".to_string()
+                    } else {
+                        self.thread_label(parent_thread_id)
+                    }
+                };
+                let next_fork_banner_parent_label = Some(
+                    if self.chat_widget.thread_id() == Some(parent_thread_id)
+                        && let Some(thread_name) = self
+                            .chat_widget
+                            .thread_name()
+                            .filter(|name| !name.trim().is_empty())
+                    {
+                        thread_name
+                    } else if let Some(channel) = self.thread_event_channels.get(&parent_thread_id)
+                    {
+                        let store = channel.store.lock().await;
+                        match store.session_configured.as_ref().map(|event| &event.msg) {
+                            Some(EventMsg::SessionConfigured(session)) => session
+                                .thread_name
+                                .clone()
+                                .filter(|name| !name.trim().is_empty())
+                                .unwrap_or_else(default_parent_label),
+                            _ => default_parent_label(),
+                        }
+                    } else {
+                        default_parent_label()
+                    },
+                );
                 self.attach_live_thread(
                     child_thread_id,
                     Arc::clone(&forked.thread),
@@ -245,7 +258,10 @@ impl App {
                         next_fork_banner_parent_label,
                     },
                 );
-                if let Err(err) = self.select_agent_thread(tui, child_thread_id).await {
+                if let Err(err) = self
+                    .select_agent_thread_and_discard_btw_chain(tui, child_thread_id)
+                    .await
+                {
                     self.discard_btw_thread(child_thread_id).await;
                     return Err(err);
                 }

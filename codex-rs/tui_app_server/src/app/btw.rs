@@ -141,35 +141,6 @@ impl App {
         self.sync_active_agent_label();
     }
 
-    async fn fork_banner_parent_label(&self, parent_thread_id: ThreadId) -> String {
-        if self.chat_widget.thread_id() == Some(parent_thread_id)
-            && let Some(thread_name) = self
-                .chat_widget
-                .thread_name()
-                .filter(|name| !name.trim().is_empty())
-        {
-            return thread_name;
-        }
-
-        if let Some(channel) = self.thread_event_channels.get(&parent_thread_id) {
-            let store = channel.store.lock().await;
-            if let Some(thread_name) = store
-                .session
-                .as_ref()
-                .and_then(|session| session.thread_name.clone())
-                .filter(|name| !name.trim().is_empty())
-            {
-                return thread_name;
-            }
-        }
-
-        if self.primary_thread_id == Some(parent_thread_id) {
-            "main thread".to_string()
-        } else {
-            self.thread_label(parent_thread_id)
-        }
-    }
-
     pub(super) async fn select_agent_thread_and_discard_btw_chain(
         &mut self,
         tui: &mut tui::Tui,
@@ -233,8 +204,34 @@ impl App {
             Ok(forked) => {
                 let AppServerStartedThread { session, turns } = forked;
                 let child_thread_id = session.thread_id;
-                let next_fork_banner_parent_label =
-                    Some(self.fork_banner_parent_label(parent_thread_id).await);
+                let default_parent_label = || {
+                    if self.primary_thread_id == Some(parent_thread_id) {
+                        "main thread".to_string()
+                    } else {
+                        self.thread_label(parent_thread_id)
+                    }
+                };
+                let next_fork_banner_parent_label = Some(
+                    if self.chat_widget.thread_id() == Some(parent_thread_id)
+                        && let Some(thread_name) = self
+                            .chat_widget
+                            .thread_name()
+                            .filter(|name| !name.trim().is_empty())
+                    {
+                        thread_name
+                    } else if let Some(channel) = self.thread_event_channels.get(&parent_thread_id)
+                    {
+                        let store = channel.store.lock().await;
+                        store
+                            .session
+                            .as_ref()
+                            .and_then(|session| session.thread_name.clone())
+                            .filter(|name| !name.trim().is_empty())
+                            .unwrap_or_else(default_parent_label)
+                    } else {
+                        default_parent_label()
+                    },
+                );
                 let channel = self.ensure_thread_channel(child_thread_id);
                 {
                     let mut store = channel.store.lock().await;

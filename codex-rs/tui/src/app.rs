@@ -2171,7 +2171,6 @@ impl App {
         if self.active_thread_id == Some(thread_id) {
             return Ok(());
         }
-        let btw_threads_to_discard = self.btw_threads_to_discard_after_switch(thread_id);
 
         let live_thread = match self.server.get_thread(thread_id).await {
             Ok(thread) => Some(thread),
@@ -2227,9 +2226,6 @@ impl App {
         }
         self.drain_active_thread_events(tui).await?;
         self.refresh_pending_thread_approvals().await;
-        for btw_thread_id in btw_threads_to_discard {
-            self.discard_btw_thread(btw_thread_id).await;
-        }
 
         Ok(())
     }
@@ -4115,7 +4111,8 @@ impl App {
                 self.open_agent_picker().await;
             }
             AppEvent::SelectAgentThread(thread_id) => {
-                self.select_agent_thread(tui, thread_id).await?;
+                self.select_agent_thread_and_discard_btw_chain(tui, thread_id)
+                    .await?;
             }
             AppEvent::OpenSkillsList => {
                 self.chat_widget.open_skills_list();
@@ -4465,7 +4462,8 @@ impl App {
             self.active_non_primary_shutdown_target(&event.msg)
         {
             self.mark_agent_picker_thread_closed(closed_thread_id);
-            self.select_agent_thread(tui, primary_thread_id).await?;
+            self.select_agent_thread_and_discard_btw_chain(tui, primary_thread_id)
+                .await?;
             if self.active_thread_id == Some(primary_thread_id) {
                 self.chat_widget.add_info_message(
                     format!(
@@ -4689,7 +4687,9 @@ impl App {
                 self.current_displayed_thread_id(),
                 AgentNavigationDirection::Previous,
             ) {
-                let _ = self.select_agent_thread(tui, thread_id).await;
+                let _ = self
+                    .select_agent_thread_and_discard_btw_chain(tui, thread_id)
+                    .await;
             }
             return;
         }
@@ -4704,7 +4704,9 @@ impl App {
                 self.current_displayed_thread_id(),
                 AgentNavigationDirection::Next,
             ) {
-                let _ = self.select_agent_thread(tui, thread_id).await;
+                let _ = self
+                    .select_agent_thread_and_discard_btw_chain(tui, thread_id)
+                    .await;
             }
             return;
         }
@@ -7262,7 +7264,7 @@ guardian_approval = true
     }
 
     fn make_test_tui() -> crate::tui::Tui {
-        crate::tui::Tui::new_test()
+        crate::tui::test_support::new_test_tui()
     }
 
     fn app_enabled_in_effective_config(config: &Config, app_id: &str) -> Option<bool> {
