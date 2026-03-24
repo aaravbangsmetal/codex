@@ -290,8 +290,8 @@ mod tests {
 
     #[test]
     fn byte_count_conversion_clamps_non_positive_values() {
-        assert_eq!(approx_tokens_from_byte_count_i64(-1), 0);
-        assert_eq!(approx_tokens_from_byte_count_i64(0), 0);
-        assert_eq!(approx_tokens_from_byte_count_i64(5), 2);
+        assert_eq!(approx_tokens_from_byte_count_i64(/*bytes*/ -1), 0);
+        assert_eq!(approx_tokens_from_byte_count_i64(/*bytes*/ 0), 0);
+        assert_eq!(approx_tokens_from_byte_count_i64(/*bytes*/ 5), 2);
     }
 }

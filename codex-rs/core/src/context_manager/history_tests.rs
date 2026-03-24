@@ -16,8 +16,8 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::default_input_modalities;
-use codex_protocol::output_truncation;
 use codex_protocol::output_truncation::TruncationPolicy;
+use codex_protocol::output_truncation::truncate_text;
 use codex_protocol::protocol::InterAgentCommunication;
 use image::ImageBuffer;
 use image::ImageFormat;
@@ -123,7 +123,7 @@ fn reasoning_with_encrypted_content(len: usize) -> ResponseItem {
 }
 
 fn truncate_exec_output(content: &str) -> String {
-    truncate::truncate_text(content, TruncationPolicy::Tokens(EXEC_FORMAT_MAX_TOKENS))
+    truncate_text(content, TruncationPolicy::Tokens(EXEC_FORMAT_MAX_TOKENS))
 }
 
 fn approx_token_count_for_text(text: &str) -> i64 {
