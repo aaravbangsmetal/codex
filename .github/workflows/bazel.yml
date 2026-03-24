@@ -50,6 +50,14 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev libpipewire-0.3-dev
+
       - name: Set up Node.js for js_repl tests
         uses: actions/setup-node@v6
         with:
