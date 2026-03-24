@@ -238,88 +238,6 @@ mod tests {
     }
 
     #[test]
-    fn truncate_bytes_less_than_placeholder_returns_placeholder() {
-        let content = "example output";
-
-        assert_eq!(
-            "Total output lines: 1\n\n…13 chars truncated…t",
-            formatted_truncate_text(content, TruncationPolicy::Bytes(1)),
-        );
-    }
-
-    #[test]
-    fn truncate_tokens_less_than_placeholder_returns_placeholder() {
-        let content = "example output";
-
-        assert_eq!(
-            "Total output lines: 1\n\nex…3 tokens truncated…ut",
-            formatted_truncate_text(content, TruncationPolicy::Tokens(1)),
-        );
-    }
-
-    #[test]
-    fn truncate_tokens_under_limit_returns_original() {
-        let content = "example output";
-
-        assert_eq!(
-            content,
-            formatted_truncate_text(content, TruncationPolicy::Tokens(10)),
-        );
-    }
-
-    #[test]
-    fn truncate_bytes_under_limit_returns_original() {
-        let content = "example output";
-
-        assert_eq!(
-            content,
-            formatted_truncate_text(content, TruncationPolicy::Bytes(20)),
-        );
-    }
-
-    #[test]
-    fn truncate_tokens_over_limit_returns_truncated() {
-        let content = "this is an example of a long output that should be truncated";
-
-        assert_eq!(
-            "Total output lines: 1\n\nthis is an…10 tokens truncated… truncated",
-            formatted_truncate_text(content, TruncationPolicy::Tokens(5)),
-        );
-    }
-
-    #[test]
-    fn truncate_bytes_over_limit_returns_truncated() {
-        let content = "this is an example of a long output that should be truncated";
-
-        assert_eq!(
-            "Total output lines: 1\n\nthis is an exam…30 chars truncated…ld be truncated",
-            formatted_truncate_text(content, TruncationPolicy::Bytes(30)),
-        );
-    }
-
-    #[test]
-    fn truncate_bytes_reports_original_line_count_when_truncated() {
-        let content =
-            "this is an example of a long output that should be truncated\nalso some other line";
-
-        assert_eq!(
-            "Total output lines: 2\n\nthis is an exam…51 chars truncated…some other line",
-            formatted_truncate_text(content, TruncationPolicy::Bytes(30)),
-        );
-    }
-
-    #[test]
-    fn truncate_tokens_reports_original_line_count_when_truncated() {
-        let content =
-            "this is an example of a long output that should be truncated\nalso some other line";
-
-        assert_eq!(
-            "Total output lines: 2\n\nthis is an example o…11 tokens truncated…also some other line",
-            formatted_truncate_text(content, TruncationPolicy::Tokens(10)),
-        );
-    }
-
-    #[test]
     fn truncate_with_token_budget_returns_original_when_under_limit() {
         let s = "short output";
         let limit = 100;
@@ -349,37 +267,5 @@ mod tests {
         let s = "😀😀😀😀😀😀😀😀😀😀\nsecond line with text\n";
         let out = truncate_middle_chars(s, /*max_bytes*/ 20);
         assert_eq!(out, "😀😀…21 chars truncated…with text\n");
-    }
-
-    #[derive(Clone, Copy)]
-    enum TruncationPolicy {
-        Bytes(usize),
-        Tokens(usize),
-    }
-
-    fn formatted_truncate_text(content: &str, policy: TruncationPolicy) -> String {
-        if content.len() <= byte_budget(policy) {
-            return content.to_string();
-        }
-
-        let total_lines = content.lines().count();
-        let result = truncate_text(content, policy);
-        format!("Total output lines: {total_lines}\n\n{result}")
-    }
-
-    fn truncate_text(content: &str, policy: TruncationPolicy) -> String {
-        match policy {
-            TruncationPolicy::Bytes(bytes) => truncate_middle_chars(content, bytes),
-            TruncationPolicy::Tokens(tokens) => {
-                truncate_middle_with_token_budget(content, tokens).0
-            }
-        }
-    }
-
-    fn byte_budget(policy: TruncationPolicy) -> usize {
-        match policy {
-            TruncationPolicy::Bytes(bytes) => bytes,
-            TruncationPolicy::Tokens(tokens) => approx_bytes_for_tokens(tokens),
-        }
     }
 }
