@@ -3623,6 +3623,35 @@ impl Session {
         state.clone_history()
     }
 
+    /// Export the current effective thread history as a fork-ready rollout snapshot.
+    ///
+    /// This is the live-thread fallback for ephemeral threads that do not have a persisted
+    /// rollout file. The exported snapshot preserves the current model-visible history as
+    /// `ResponseItem`s and synthesizes matching legacy `EventMsg`s for replay-driven UIs.
+    pub(crate) async fn live_fork_history(&self) -> InitialHistory {
+        let history = self.clone_history().await;
+        let show_raw_agent_reasoning = self.show_raw_agent_reasoning();
+        let mut rollout_items = Vec::new();
+
+        for item in history.raw_items() {
+            rollout_items.push(RolloutItem::ResponseItem(item.clone()));
+            if let Some(turn_item) = parse_turn_item(item) {
+                rollout_items.extend(
+                    turn_item
+                        .as_legacy_events(show_raw_agent_reasoning)
+                        .into_iter()
+                        .map(RolloutItem::EventMsg),
+                );
+            }
+        }
+
+        if rollout_items.is_empty() {
+            InitialHistory::New
+        } else {
+            InitialHistory::Forked(rollout_items)
+        }
+    }
+
     pub(crate) async fn reference_context_item(&self) -> Option<TurnContextItem> {
         let state = self.state.lock().await;
         state.reference_context_item()

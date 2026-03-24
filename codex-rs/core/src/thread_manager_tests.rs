@@ -22,7 +22,7 @@ fn user_msg(text: &str) -> ResponseItem {
     ResponseItem::Message {
         id: None,
         role: "user".to_string(),
-        content: vec![ContentItem::OutputText {
+        content: vec![ContentItem::InputText {
             text: text.to_string(),
         }],
         end_turn: None,
@@ -712,5 +712,69 @@ async fn interrupted_fork_snapshot_uses_persisted_mid_turn_history_without_live_
             })
             .count(),
         1,
+    );
+}
+
+#[tokio::test]
+async fn fork_thread_from_live_pathless_source_uses_live_history() {
+    let temp_dir = tempdir().expect("tempdir");
+    let mut config = test_config();
+    config.codex_home = temp_dir.path().join("codex-home");
+    config.cwd = config.codex_home.clone();
+    config.ephemeral = true;
+    std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+    let auth_manager =
+        AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let manager = ThreadManager::new(
+        &config,
+        auth_manager.clone(),
+        SessionSource::Exec,
+        CollaborationModesConfig::default(),
+    );
+
+    let source = manager
+        .resume_thread_with_history(
+            config.clone(),
+            InitialHistory::Forked(vec![
+                RolloutItem::ResponseItem(user_msg("hello from btw")),
+                RolloutItem::ResponseItem(assistant_msg("side answer")),
+            ]),
+            auth_manager,
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
+        .await
+        .expect("create ephemeral source thread");
+    assert_eq!(source.thread.rollout_path(), None);
+
+    let forked = manager
+        .fork_thread_from_thread(
+            /*snapshot*/ usize::MAX,
+            config,
+            source.thread_id,
+            /*persist_extended_history*/ false,
+            /*parent_trace*/ None,
+        )
+        .await
+        .expect("fork from live pathless source");
+
+    assert_ne!(forked.thread_id, source.thread_id);
+    assert_eq!(forked.thread.rollout_path(), None);
+    assert!(
+        forked
+            .session_configured
+            .initial_messages
+            .as_ref()
+            .is_some_and(|messages| {
+                messages.iter().any(|message| {
+                    matches!(
+                        message,
+                        EventMsg::UserMessage(UserMessageEvent { message, .. })
+                            if message == "hello from btw"
+                    )
+                })
+            }),
+        "expected live fork to synthesize replayable user history"
     );
 }

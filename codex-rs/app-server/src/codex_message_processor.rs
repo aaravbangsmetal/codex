@@ -3930,7 +3930,7 @@ impl CodexMessageProcessor {
         } = params;
 
         let (rollout_path, source_thread_id) = if let Some(path) = path {
-            (path, None)
+            (Some(path), None)
         } else {
             let existing_thread_id = match ThreadId::from_string(&thread_id) {
                 Ok(id) => id,
@@ -3950,14 +3950,23 @@ impl CodexMessageProcessor {
             )
             .await
             {
-                Ok(Some(p)) => (p, Some(existing_thread_id)),
+                Ok(Some(p)) => (Some(p), Some(existing_thread_id)),
                 Ok(None) => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!("no rollout found for thread id {existing_thread_id}"),
-                    )
-                    .await;
-                    return;
+                    if self
+                        .thread_manager
+                        .get_thread(existing_thread_id)
+                        .await
+                        .is_ok()
+                    {
+                        (None, Some(existing_thread_id))
+                    } else {
+                        self.send_invalid_request_error(
+                            request_id,
+                            format!("no rollout found for thread id {existing_thread_id}"),
+                        )
+                        .await;
+                        return;
+                    }
                 }
                 Err(err) => {
                     self.send_invalid_request_error(
@@ -3970,9 +3979,17 @@ impl CodexMessageProcessor {
             }
         };
 
-        let history_cwd =
+        let history_cwd = if let Some(rollout_path) = rollout_path.as_ref() {
             read_history_cwd_from_state_db(&self.config, source_thread_id, rollout_path.as_path())
-                .await;
+                .await
+        } else if let Some(source_thread_id) = source_thread_id {
+            match self.thread_manager.get_thread(source_thread_id).await {
+                Ok(thread) => Some(thread.config_snapshot().await.cwd),
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
 
         // Persist Windows sandbox mode.
         let mut cli_overrides = cli_overrides.unwrap_or_default();
@@ -4037,26 +4054,54 @@ impl CodexMessageProcessor {
             thread: forked_thread,
             session_configured,
             ..
-        } = match self
-            .thread_manager
-            .fork_thread(
-                ForkSnapshot::Interrupted,
-                config,
-                rollout_path.clone(),
-                persist_extended_history,
-                self.request_trace_context(&request_id).await,
+        } = match if let Some(rollout_path) = rollout_path.as_ref() {
+            self.thread_manager
+                .fork_thread(
+                    ForkSnapshot::Interrupted,
+                    config,
+                    rollout_path.clone(),
+                    persist_extended_history,
+                    self.request_trace_context(&request_id).await,
+                )
+                .await
+        } else if let Some(source_thread_id) = source_thread_id {
+            self.thread_manager
+                .fork_thread_from_thread(
+                    ForkSnapshot::Interrupted,
+                    config,
+                    source_thread_id,
+                    persist_extended_history,
+                    self.request_trace_context(&request_id).await,
+                )
+                .await
+        } else {
+            self.send_internal_error(
+                request_id,
+                "error forking live thread: missing source thread id".to_string(),
             )
-            .await
-        {
+            .await;
+            return;
+        } {
             Ok(thread) => thread,
             Err(err) => {
                 match err {
                     CodexErr::Io(_) | CodexErr::Json(_) => {
-                        self.send_invalid_request_error(
-                            request_id,
-                            format!("failed to load rollout `{}`: {err}", rollout_path.display()),
-                        )
-                        .await;
+                        if let Some(rollout_path) = rollout_path.as_ref() {
+                            self.send_invalid_request_error(
+                                request_id,
+                                format!(
+                                    "failed to load rollout `{}`: {err}",
+                                    rollout_path.display()
+                                ),
+                            )
+                            .await;
+                        } else {
+                            self.send_internal_error(
+                                request_id,
+                                format!("error forking live thread: {err}"),
+                            )
+                            .await;
+                        }
                     }
                     CodexErr::InvalidRequest(message) => {
                         self.send_invalid_request_error(request_id, message).await;
@@ -4114,22 +4159,30 @@ impl CodexMessageProcessor {
             // forked thread names do not inherit the source thread name
             let mut thread =
                 build_thread_from_snapshot(thread_id, &config_snapshot, /*path*/ None);
-            let history_items = match read_rollout_items_from_rollout(rollout_path.as_path()).await
-            {
-                Ok(items) => items,
-                Err(err) => {
-                    self.send_internal_error(
-                        request_id,
-                        format!(
-                            "failed to load source rollout `{}` for thread {thread_id}: {err}",
-                            rollout_path.display()
-                        ),
-                    )
-                    .await;
-                    return;
+            let history_items = if let Some(rollout_path) = rollout_path.as_ref() {
+                match read_rollout_items_from_rollout(rollout_path.as_path()).await {
+                    Ok(items) => items,
+                    Err(err) => {
+                        self.send_internal_error(
+                            request_id,
+                            format!(
+                                "failed to load source rollout `{}` for thread {thread_id}: {err}",
+                                rollout_path.display()
+                            ),
+                        )
+                        .await;
+                        return;
+                    }
                 }
+            } else {
+                session_configured
+                    .initial_messages
+                    .clone()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(RolloutItem::EventMsg)
+                    .collect()
             };
-            thread.preview = preview_from_rollout_items(&history_items);
             if let Err(message) = populate_thread_turns(
                 &mut thread,
                 ThreadTurnSource::HistoryItems(&history_items),
@@ -4139,6 +4192,29 @@ impl CodexMessageProcessor {
             {
                 self.send_internal_error(request_id, message).await;
                 return;
+            }
+            thread.preview = preview_from_rollout_items(&history_items);
+            if thread.preview.is_empty() {
+                thread.preview = thread
+                    .turns
+                    .iter()
+                    .flat_map(|turn| &turn.items)
+                    .find_map(|item| match item {
+                        ThreadItem::UserMessage { content, .. } => Some(
+                            content
+                                .iter()
+                                .filter_map(|input| match input {
+                                    V2UserInput::Text { text, .. } => Some(text.as_str()),
+                                    V2UserInput::Image { .. }
+                                    | V2UserInput::LocalImage { .. }
+                                    | V2UserInput::Skill { .. }
+                                    | V2UserInput::Mention { .. } => None,
+                                })
+                                .collect::<String>(),
+                        ),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
             }
             thread
         };

@@ -69,6 +69,7 @@ use codex_core::config::types::ModelAvailabilityNuxConfig;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::LoaderOverrides;
+use codex_core::error::CodexErr;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
@@ -3022,67 +3023,73 @@ impl App {
                 );
                 self.chat_widget
                     .add_plain_history_lines(vec!["/fork".magenta().into()]);
-                if let Some(path) = self.chat_widget.rollout_path() {
-                    self.refresh_in_memory_config_from_disk_best_effort("forking the thread")
-                        .await;
-                    // Fresh threads expose a precomputed path, but the file is
-                    // materialized lazily on first user message.
-                    if path.exists() {
-                        match self
-                            .server
-                            .fork_thread(
-                                ForkSnapshot::Interrupted,
-                                self.config.clone(),
-                                path.clone(),
-                                /*persist_extended_history*/ false,
-                                /*parent_trace*/ None,
-                            )
-                            .await
-                        {
-                            Ok(forked) => {
-                                self.shutdown_attached_threads_except(forked.thread_id)
-                                    .await;
-                                let init = self.chatwidget_init_for_forked_or_resumed_thread(
-                                    tui,
-                                    self.config.clone(),
-                                );
-                                self.replace_chat_widget(ChatWidget::new_from_existing(
-                                    init,
-                                    forked.thread,
-                                    forked.session_configured,
-                                ));
-                                self.reset_thread_event_state();
-                                if let Some(summary) = summary {
-                                    let mut lines: Vec<Line<'static>> =
-                                        vec![summary.usage_line.clone().into()];
-                                    if let Some(command) = summary.resume_command {
-                                        let spans = vec![
-                                            "To continue this session, run ".into(),
-                                            command.cyan(),
-                                        ];
-                                        lines.push(spans.into());
-                                    }
-                                    self.chat_widget.add_plain_history_lines(lines);
-                                }
-                            }
-                            Err(err) => {
-                                let path_display = path.display();
-                                self.chat_widget.add_error_message(format!(
-                                    "Failed to fork current session from {path_display}: {err}"
-                                ));
-                            }
-                        }
-                    } else {
-                        self.chat_widget.add_error_message(
-                            "A thread must contain at least one turn before it can be forked."
-                                .to_string(),
-                        );
-                    }
+                self.refresh_in_memory_config_from_disk_best_effort("forking the thread")
+                    .await;
+                let fork_result = if let Some(path) =
+                    self.chat_widget.rollout_path().filter(|path| path.exists())
+                {
+                    self.server
+                        .fork_thread(
+                            ForkSnapshot::Interrupted,
+                            self.config.clone(),
+                            path,
+                            /*persist_extended_history*/ false,
+                            /*parent_trace*/ None,
+                        )
+                        .await
+                } else if let Some(thread_id) = self.chat_widget.thread_id() {
+                    self.server
+                        .fork_thread_from_thread(
+                            ForkSnapshot::Interrupted,
+                            self.config.clone(),
+                            thread_id,
+                            /*persist_extended_history*/ false,
+                            /*parent_trace*/ None,
+                        )
+                        .await
                 } else {
-                    self.chat_widget.add_error_message(
+                    Err(CodexErr::InvalidRequest(
                         "A thread must contain at least one turn before it can be forked."
                             .to_string(),
-                    );
+                    ))
+                };
+
+                match fork_result {
+                    Ok(forked) => {
+                        self.shutdown_attached_threads_except(forked.thread_id)
+                            .await;
+                        let init = self
+                            .chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
+                        self.replace_chat_widget(ChatWidget::new_from_existing(
+                            init,
+                            forked.thread,
+                            forked.session_configured,
+                        ));
+                        self.reset_thread_event_state();
+                        if let Some(summary) = summary {
+                            let mut lines: Vec<Line<'static>> =
+                                vec![summary.usage_line.clone().into()];
+                            if let Some(command) = summary.resume_command {
+                                let spans =
+                                    vec!["To continue this session, run ".into(), command.cyan()];
+                                lines.push(spans.into());
+                            }
+                            self.chat_widget.add_plain_history_lines(lines);
+                        }
+                    }
+                    Err(CodexErr::InvalidRequest(message)) => {
+                        self.chat_widget.add_error_message(message);
+                    }
+                    Err(err) => {
+                        let thread_label = self
+                            .chat_widget
+                            .thread_id()
+                            .map(|thread_id| thread_id.to_string())
+                            .unwrap_or_else(|| "the current thread".to_string());
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to fork current session from {thread_label}: {err}"
+                        ));
+                    }
                 }
 
                 tui.frame_requester().schedule_frame();

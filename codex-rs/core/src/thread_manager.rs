@@ -32,6 +32,7 @@ use codex_protocol::config_types::CollaborationModeMask;
 #[cfg(test)]
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::protocol::AgentStatus;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
@@ -39,6 +40,7 @@ use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
+use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::W3cTraceContext;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
@@ -602,19 +604,85 @@ impl ThreadManager {
     {
         let snapshot = snapshot.into();
         let history = RolloutRecorder::get_rollout_history(&path).await?;
-        let snapshot_state = snapshot_turn_state(&history);
+        let history = apply_fork_snapshot(snapshot, history);
+        Box::pin(self.state.spawn_thread(
+            config,
+            history,
+            Arc::clone(&self.state.auth_manager),
+            self.agent_control(),
+            Vec::new(),
+            persist_extended_history,
+            /*metrics_service_name*/ None,
+            parent_trace,
+            /*user_shell_override*/ None,
+        ))
+        .await
+    }
+
+    /// Fork an existing live thread. When the source thread has a persisted rollout, this reuses
+    /// the normal path-backed fork logic. Ephemeral/pathless threads fall back to the current
+    /// in-memory history snapshot.
+    pub async fn fork_thread_from_thread<S>(
+        &self,
+        snapshot: S,
+        config: Config,
+        source_thread_id: ThreadId,
+        persist_extended_history: bool,
+        parent_trace: Option<W3cTraceContext>,
+    ) -> CodexResult<NewThread>
+    where
+        S: Into<ForkSnapshot>,
+    {
+        let snapshot = snapshot.into();
+        let source_thread = self.state.get_thread(source_thread_id).await?;
+        if let Some(path) = source_thread.rollout_path() {
+            return self
+                .fork_thread(
+                    snapshot,
+                    config,
+                    path,
+                    persist_extended_history,
+                    parent_trace,
+                )
+                .await;
+        }
+
+        let source_status = source_thread.agent_status().await;
+        let mut history = source_thread.codex.session.live_fork_history().await;
+        if matches!(history, InitialHistory::New) {
+            return Err(CodexErr::InvalidRequest(
+                "A thread must contain at least one turn before it can be forked.".to_string(),
+            ));
+        }
+        if !matches!(source_status, AgentStatus::Running) {
+            let snapshot_state = snapshot_turn_state(&history);
+            if snapshot_state.ends_mid_turn {
+                let completed_event =
+                    RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
+                        turn_id: snapshot_state.active_turn_id.unwrap_or_default(),
+                        last_agent_message: None,
+                    }));
+                history = match history {
+                    InitialHistory::New => InitialHistory::Forked(vec![completed_event]),
+                    InitialHistory::Forked(mut history) => {
+                        history.push(completed_event);
+                        InitialHistory::Forked(history)
+                    }
+                    InitialHistory::Resumed(mut resumed) => {
+                        resumed.history.push(completed_event);
+                        InitialHistory::Forked(resumed.history)
+                    }
+                };
+            }
+        }
         let history = match snapshot {
             ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message) => {
+                let snapshot_state = snapshot_turn_state(&history);
                 truncate_before_nth_user_message(history, nth_user_message, &snapshot_state)
             }
             ForkSnapshot::Interrupted => {
-                let history = match history {
-                    InitialHistory::New => InitialHistory::New,
-                    InitialHistory::Forked(history) => InitialHistory::Forked(history),
-                    InitialHistory::Resumed(resumed) => InitialHistory::Forked(resumed.history),
-                };
-                if snapshot_state.ends_mid_turn {
-                    append_interrupted_boundary(history, snapshot_state.active_turn_id)
+                if matches!(source_status, AgentStatus::Running) {
+                    append_interrupted_boundary(history, /*turn_id*/ None)
                 } else {
                     history
                 }
@@ -941,6 +1009,27 @@ struct SnapshotTurnState {
     ends_mid_turn: bool,
     active_turn_id: Option<String>,
     active_turn_start_index: Option<usize>,
+}
+
+fn apply_fork_snapshot(snapshot: ForkSnapshot, history: InitialHistory) -> InitialHistory {
+    let snapshot_state = snapshot_turn_state(&history);
+    match snapshot {
+        ForkSnapshot::TruncateBeforeNthUserMessage(nth_user_message) => {
+            truncate_before_nth_user_message(history, nth_user_message, &snapshot_state)
+        }
+        ForkSnapshot::Interrupted => {
+            let history = match history {
+                InitialHistory::New => InitialHistory::New,
+                InitialHistory::Forked(history) => InitialHistory::Forked(history),
+                InitialHistory::Resumed(resumed) => InitialHistory::Forked(resumed.history),
+            };
+            if snapshot_state.ends_mid_turn {
+                append_interrupted_boundary(history, snapshot_state.active_turn_id)
+            } else {
+                history
+            }
+        }
+    }
 }
 
 fn snapshot_turn_state(history: &InitialHistory) -> SnapshotTurnState {

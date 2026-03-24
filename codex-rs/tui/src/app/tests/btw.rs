@@ -350,15 +350,10 @@ async fn fork_current_session_discards_active_btw_chain() -> Result<()> {
 
     let parent_thread_id = setup_btw_parent_thread(&mut app, None).await?;
     let child_thread_id = start_btw_thread(&mut app, &mut tui, parent_thread_id).await?;
-    let child_rollout_path = app
-        .server
-        .get_thread(child_thread_id)
-        .await?
-        .rollout_path()
-        .expect("BTW child rollout path");
-    assert!(
-        child_rollout_path.exists(),
-        "expected BTW child rollout path"
+    assert_eq!(
+        app.server.get_thread(child_thread_id).await?.rollout_path(),
+        None,
+        "expected BTW child to stay ephemeral"
     );
 
     let control = app

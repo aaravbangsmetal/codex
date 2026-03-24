@@ -168,47 +168,51 @@ impl App {
         );
         self.refresh_in_memory_config_from_disk_best_effort("starting a BTW subagent")
             .await;
-        let parent_rollout_path = match self.server.get_thread(parent_thread_id).await {
-            Ok(thread) => thread.rollout_path(),
+        let snapshot = if self.chat_widget.agent_turn_running() {
+            ForkSnapshot::Interrupted
+        } else {
+            ForkSnapshot::TruncateBeforeNthUserMessage(usize::MAX)
+        };
+        let mut fork_config = self.config.clone();
+        fork_config.ephemeral = true;
+        let fork_result = match self.server.get_thread(parent_thread_id).await {
+            Ok(_) => {
+                self.server
+                    .fork_thread_from_thread(
+                        snapshot,
+                        fork_config,
+                        parent_thread_id,
+                        /*persist_extended_history*/ false,
+                        /*parent_trace*/ None,
+                    )
+                    .await
+            }
             Err(err) => {
-                if self.current_displayed_thread_id() == Some(parent_thread_id) {
-                    self.chat_widget.rollout_path()
-                } else {
+                if self.current_displayed_thread_id() != Some(parent_thread_id) {
                     self.chat_widget.add_error_message(format!(
                         "Failed to fork BTW thread from {parent_thread_id}: {err}"
                     ));
                     return Ok(AppRunControl::Continue);
                 }
+                let Some(parent_rollout_path) =
+                    self.chat_widget.rollout_path().filter(|path| path.exists())
+                else {
+                    self.chat_widget.add_error_message(
+                        "A thread must contain at least one turn before /btw can fork it."
+                            .to_string(),
+                    );
+                    return Ok(AppRunControl::Continue);
+                };
+                self.server
+                    .fork_thread(
+                        snapshot,
+                        fork_config,
+                        parent_rollout_path.clone(),
+                        /*persist_extended_history*/ false,
+                        /*parent_trace*/ None,
+                    )
+                    .await
             }
-        }
-        .filter(|path| path.exists());
-        let Some(parent_rollout_path) = parent_rollout_path else {
-            self.chat_widget.add_error_message(
-                "A thread must contain at least one turn before /btw can fork it.".to_string(),
-            );
-            return Ok(AppRunControl::Continue);
-        };
-
-        let fork_result = if self.chat_widget.agent_turn_running() {
-            self.server
-                .fork_thread(
-                    ForkSnapshot::Interrupted,
-                    self.config.clone(),
-                    parent_rollout_path.clone(),
-                    /*persist_extended_history*/ false,
-                    /*parent_trace*/ None,
-                )
-                .await
-        } else {
-            self.server
-                .fork_thread(
-                    /*snapshot*/ usize::MAX,
-                    self.config.clone(),
-                    parent_rollout_path.clone(),
-                    /*persist_extended_history*/ false,
-                    /*parent_trace*/ None,
-                )
-                .await
         };
 
         match fork_result {
@@ -280,9 +284,8 @@ impl App {
                 }
             }
             Err(err) => {
-                let path_display = parent_rollout_path.display();
                 self.chat_widget.add_error_message(format!(
-                    "Failed to start BTW thread from {path_display}: {err}"
+                    "Failed to start BTW thread from {parent_thread_id}: {err}"
                 ));
             }
         }
