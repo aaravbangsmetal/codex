@@ -332,7 +332,7 @@ impl AppServerSession {
     ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let mut params =
-            thread_fork_params_from_config(config, thread_id, self.thread_params_mode());
+            thread_fork_params_from_config(&config, thread_id, self.thread_params_mode());
         params.path = path;
         let response: ThreadForkResponse = self
             .client
@@ -856,19 +856,19 @@ fn thread_resume_params_from_config(
 }
 
 fn thread_fork_params_from_config(
-    config: Config,
+    config: &Config,
     thread_id: ThreadId,
     thread_params_mode: ThreadParamsMode,
 ) -> ThreadForkParams {
     ThreadForkParams {
         thread_id: thread_id.to_string(),
         model: config.model.clone(),
-        model_provider: thread_params_mode.model_provider_from_config(&config),
-        cwd: thread_cwd_from_config(&config, thread_params_mode),
+        model_provider: thread_params_mode.model_provider_from_config(config),
+        cwd: thread_cwd_from_config(config, thread_params_mode),
         approval_policy: Some(config.permissions.approval_policy.value().into()),
-        approvals_reviewer: approvals_reviewer_override_from_config(&config),
+        approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get().clone()),
-        config: config_request_overrides_from_config(&config),
+        config: config_request_overrides_from_config(config),
         ephemeral: config.ephemeral,
         persist_extended_history: true,
         ..ThreadForkParams::default()
@@ -1131,7 +1131,7 @@ mod tests {
         let start = thread_start_params_from_config(&config, ThreadParamsMode::Remote);
         let resume =
             thread_resume_params_from_config(config.clone(), thread_id, ThreadParamsMode::Remote);
-        let fork = thread_fork_params_from_config(config, thread_id, ThreadParamsMode::Remote);
+        let fork = thread_fork_params_from_config(&config, thread_id, ThreadParamsMode::Remote);
 
         assert_eq!(start.cwd, None);
         assert_eq!(resume.cwd, None);

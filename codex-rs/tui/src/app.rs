@@ -1803,7 +1803,7 @@ impl App {
                     thread_id,
                     config_snapshot.session_source.get_nickname(),
                     config_snapshot.session_source.get_agent_role(),
-                    false,
+                    /*is_closed*/ false,
                 );
             }
         }
@@ -2214,8 +2214,7 @@ impl App {
         let next_btw_fork_banner_parent_label =
             self.take_next_btw_fork_banner_parent_label(thread_id);
         let mut chat_widget = ChatWidget::new_with_op_sender(init, codex_op_tx);
-        chat_widget
-            .set_next_fork_banner_parent_label(next_btw_fork_banner_parent_label);
+        chat_widget.set_next_fork_banner_parent_label(next_btw_fork_banner_parent_label);
         self.replace_chat_widget(chat_widget);
 
         self.reset_for_thread_switch(tui)?;

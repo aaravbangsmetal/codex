@@ -138,22 +138,35 @@ impl App {
         self.sync_active_agent_label();
     }
 
-    async fn fork_banner_parent_label(&self, parent_thread_id: ThreadId) -> Option<String> {
-        if self.chat_widget.thread_id() == Some(parent_thread_id) {
-            return self
+    async fn fork_banner_parent_label(&self, parent_thread_id: ThreadId) -> String {
+        if self.chat_widget.thread_id() == Some(parent_thread_id)
+            && let Some(thread_name) = self
                 .chat_widget
                 .thread_name()
-                .filter(|name| !name.trim().is_empty());
+                .filter(|name| !name.trim().is_empty())
+        {
+            return thread_name;
         }
 
-        let channel = self.thread_event_channels.get(&parent_thread_id)?;
-        let store = channel.store.lock().await;
-        match store.session_configured.as_ref().map(|event| &event.msg) {
-            Some(EventMsg::SessionConfigured(session)) => session
-                .thread_name
-                .clone()
-                .filter(|name| !name.trim().is_empty()),
-            _ => None,
+        if let Some(channel) = self.thread_event_channels.get(&parent_thread_id) {
+            let store = channel.store.lock().await;
+            if let Some(thread_name) =
+                match store.session_configured.as_ref().map(|event| &event.msg) {
+                    Some(EventMsg::SessionConfigured(session)) => session
+                        .thread_name
+                        .clone()
+                        .filter(|name| !name.trim().is_empty()),
+                    _ => None,
+                }
+            {
+                return thread_name;
+            }
+        }
+
+        if self.primary_thread_id == Some(parent_thread_id) {
+            "main thread".to_string()
+        } else {
+            self.thread_label(parent_thread_id)
         }
     }
 
@@ -193,8 +206,8 @@ impl App {
 
         let fork_result = if self.chat_widget.agent_turn_running() {
             self.server
-                .fork_thread_from_interrupted_snapshot(
-                    /*nth_user_message*/ usize::MAX,
+                .fork_thread(
+                    ForkSnapshot::Interrupted,
                     self.config.clone(),
                     parent_rollout_path.clone(),
                     /*persist_extended_history*/ false,
@@ -204,7 +217,7 @@ impl App {
         } else {
             self.server
                 .fork_thread(
-                    /*nth_user_message*/ usize::MAX,
+                    /*snapshot*/ usize::MAX,
                     self.config.clone(),
                     parent_rollout_path.clone(),
                     /*persist_extended_history*/ false,
@@ -217,7 +230,7 @@ impl App {
             Ok(forked) => {
                 let child_thread_id = forked.thread_id;
                 let next_fork_banner_parent_label =
-                    self.fork_banner_parent_label(parent_thread_id).await;
+                    Some(self.fork_banner_parent_label(parent_thread_id).await);
                 self.attach_live_thread(
                     child_thread_id,
                     Arc::clone(&forked.thread),

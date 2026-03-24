@@ -414,6 +414,7 @@ async fn setup_btw_parent_thread(app: &mut App, parent_message: Option<&str>) ->
                         source: SessionSource::Cli,
                         agent_nickname: None,
                         agent_role: None,
+                        agent_path: None,
                         model_provider: Some(app.config.model_provider_id.clone()),
                         base_instructions: None,
                         dynamic_tools: None,

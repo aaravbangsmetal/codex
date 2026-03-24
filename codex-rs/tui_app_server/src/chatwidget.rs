@@ -1939,57 +1939,7 @@ impl ChatWidget {
             PlainHistoryCell::new(vec![line]),
         )));
     }
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+
     fn on_thread_name_updated(&mut self, event: codex_protocol::protocol::ThreadNameUpdatedEvent) {
         if self.thread_id == Some(event.thread_id) {
             self.thread_name = event.thread_name;
@@ -5395,7 +5345,7 @@ impl ChatWidget {
                 return None;
             }
             self.submit_op(AppCommand::run_user_shell_command(cmd.to_string()));
-            return;
+            return None;
         }
 
         for image_url in &remote_image_urls {
@@ -5528,7 +5478,7 @@ impl ChatWidget {
             self.add_error_message(
                 "Thread model is unavailable. Wait for the thread to finish syncing or choose a model before sending input.".to_string(),
             );
-            return;
+            return None;
         }
         let collaboration_mode = if self.collaboration_modes_enabled() {
             self.active_collaboration_mask

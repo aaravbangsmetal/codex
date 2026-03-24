@@ -1,5 +1,4 @@
 use super::*;
-use crate::EventPersistenceMode;
 use crate::codex::make_session_and_context;
 use crate::config::test_config;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;

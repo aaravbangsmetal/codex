@@ -141,22 +141,32 @@ impl App {
         self.sync_active_agent_label();
     }
 
-    async fn fork_banner_parent_label(&self, parent_thread_id: ThreadId) -> Option<String> {
-        if self.chat_widget.thread_id() == Some(parent_thread_id) {
-            return self
+    async fn fork_banner_parent_label(&self, parent_thread_id: ThreadId) -> String {
+        if self.chat_widget.thread_id() == Some(parent_thread_id)
+            && let Some(thread_name) = self
                 .chat_widget
                 .thread_name()
-                .filter(|name| !name.trim().is_empty());
+                .filter(|name| !name.trim().is_empty())
+        {
+            return thread_name;
         }
 
-        let channel = self.thread_event_channels.get(&parent_thread_id)?;
-        let store = channel.store.lock().await;
-        match store.session_configured.as_ref().map(|event| &event.msg) {
-            Some(EventMsg::SessionConfigured(session)) => session
-                .thread_name
-                .clone()
-                .filter(|name| !name.trim().is_empty()),
-            _ => None,
+        if let Some(channel) = self.thread_event_channels.get(&parent_thread_id) {
+            let store = channel.store.lock().await;
+            if let Some(thread_name) = store
+                .session
+                .as_ref()
+                .and_then(|session| session.thread_name.clone())
+                .filter(|name| !name.trim().is_empty())
+            {
+                return thread_name;
+            }
+        }
+
+        if self.primary_thread_id == Some(parent_thread_id) {
+            "main thread".to_string()
+        } else {
+            self.thread_label(parent_thread_id)
         }
     }
 
@@ -221,17 +231,15 @@ impl App {
 
         match fork_result {
             Ok(forked) => {
-                let child_thread_id = forked.session_configured.session_id;
+                let AppServerStartedThread { session, turns } = forked;
+                let child_thread_id = session.thread_id;
                 let next_fork_banner_parent_label =
-                    self.fork_banner_parent_label(parent_thread_id).await;
-                self.enqueue_thread_event(
-                    child_thread_id,
-                    Event {
-                        id: String::new(),
-                        msg: EventMsg::SessionConfigured(forked.session_configured),
-                    },
-                )
-                .await?;
+                    Some(self.fork_banner_parent_label(parent_thread_id).await);
+                let channel = self.ensure_thread_channel(child_thread_id);
+                {
+                    let mut store = channel.store.lock().await;
+                    store.set_session(session, turns);
+                }
                 self.btw_threads.insert(
                     child_thread_id,
                     BtwThreadState {
