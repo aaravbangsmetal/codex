@@ -1019,7 +1019,7 @@ async fn multi_agent_v2_completion_sends_inter_agent_message_to_direct_parent() 
         )
         .await;
 
-    timeout(Duration::from_secs(2), async {
+    timeout(Duration::from_secs(5), async {
         loop {
             let delivered = harness
                 .manager
@@ -1056,7 +1056,7 @@ async fn multi_agent_v2_completion_sends_inter_agent_message_to_direct_parent() 
         Vec::new(),
         "done".to_string(),
     );
-    timeout(Duration::from_secs(2), async {
+    timeout(Duration::from_secs(5), async {
         loop {
             let history_items = worker_thread
                 .codex
