@@ -241,12 +241,12 @@ mod tests {
             secrets_manager.clone(),
         );
         let stored_identity =
-            seed_stored_identity(&manager, &secrets_manager, "agent_123", "account-123");
+            seed_stored_identity(&manager, &secrets_manager, "agent-123", "account-123");
         let encrypted_task_id =
             encrypt_task_id_for_identity(&stored_identity, "task_123").expect("task ciphertext");
 
         Mock::given(method("POST"))
-            .and(path("/v1/agent/agent_123/task/register"))
+            .and(path("/v1/agent/agent-123/task/register"))
             .and(header("authorization", "Bearer access-token-account-123"))
             .and(header("chatgpt-account-id", "account-123"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -265,7 +265,7 @@ mod tests {
         assert_eq!(
             task,
             RegisteredAgentTask {
-                agent_runtime_id: "agent_123".to_string(),
+                agent_runtime_id: "agent-123".to_string(),
                 task_id: "task_123".to_string(),
                 registered_at: task.registered_at.clone(),
             }
@@ -292,18 +292,18 @@ mod tests {
             secrets_manager.clone(),
         );
         let stored_identity =
-            seed_stored_identity(&manager, &secrets_manager, "agent_fallback", "account-123");
+            seed_stored_identity(&manager, &secrets_manager, "agent-fallback", "account-123");
         let encrypted_task_id = encrypt_task_id_for_identity(&stored_identity, "task_fallback")
             .expect("task ciphertext");
 
         Mock::given(method("POST"))
-            .and(path("/v1/agent/agent_fallback/task/register"))
+            .and(path("/v1/agent/agent-fallback/task/register"))
             .respond_with(ResponseTemplate::new(404))
             .expect(1)
             .mount(&server)
             .await;
         Mock::given(method("POST"))
-            .and(path("/backend-api/v1/agent/agent_fallback/task/register"))
+            .and(path("/backend-api/v1/agent/agent-fallback/task/register"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "encrypted_task_id": encrypted_task_id,
             })))
@@ -317,7 +317,7 @@ mod tests {
             .unwrap()
             .expect("task should be registered");
 
-        assert_eq!(task.agent_runtime_id, "agent_fallback");
+        assert_eq!(task.agent_runtime_id, "agent-fallback");
         assert_eq!(task.task_id, "task_fallback");
     }
 
