@@ -39,6 +39,11 @@ async fn screen_recording_autostarts_and_supports_pause_resume() -> Result<()> {
 [features]
 screen_recording = true
 
+[otel]
+exporter = "none"
+trace_exporter = "none"
+metrics_exporter = "none"
+
 [recording.screen]
 enabled = true
 "#,

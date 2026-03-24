@@ -20,6 +20,10 @@ use codex_app_server_protocol::ServerNotification;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::fs::File;
 use std::io::ErrorKind;
+use std::io::Read;
+use std::io::Seek;
+use std::io::SeekFrom;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -34,6 +38,7 @@ pub(crate) const SCREEN_RECORDING_FEATURE_DISABLED_MESSAGE: &str =
     "screen recording feature is disabled";
 const SCREEN_RECORDING_OWNED_BY_ANOTHER_PROCESS_MESSAGE: &str =
     "screen recording is owned by another app-server process";
+const LOCK_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
 pub(crate) struct ScreenRecordingManager {
     inner: Arc<Inner>,
@@ -55,6 +60,8 @@ struct RuntimeState {
     paused: bool,
     status: ScreenRecordingStatus,
     task: Option<JoinHandle<()>>,
+    lock_retry: Option<JoinHandle<()>>,
+    lock_retry_cancel: Option<CancellationToken>,
     cancel: Option<CancellationToken>,
     owner_lock: Option<File>,
     last_pruned_at: Option<i64>,
@@ -119,6 +126,8 @@ impl ScreenRecordingManager {
                     paused: false,
                     status,
                     task: None,
+                    lock_retry: None,
+                    lock_retry_cancel: None,
                     cancel: None,
                     owner_lock: None,
                     last_pruned_at: None,
@@ -211,8 +220,12 @@ impl ScreenRecordingManager {
                 status.paused = runtime.paused;
                 if runtime.task.is_none() {
                     status.state = ScreenRecordingState::Error;
-                    status.last_error =
-                        Some(SCREEN_RECORDING_OWNED_BY_ANOTHER_PROCESS_MESSAGE.to_string());
+                    if !status.last_error.as_deref().is_some_and(|last_error| {
+                        last_error.starts_with(SCREEN_RECORDING_OWNED_BY_ANOTHER_PROCESS_MESSAGE)
+                    }) {
+                        status.last_error =
+                            Some(SCREEN_RECORDING_OWNED_BY_ANOTHER_PROCESS_MESSAGE.to_string());
+                    }
                     status.captured_display_count = 0;
                 } else if runtime.paused {
                     status.state = ScreenRecordingState::Paused;
@@ -254,92 +267,158 @@ impl ScreenRecordingManager {
     }
 
     pub(crate) async fn shutdown(&self) {
-        let (cancel, task) = {
-            let mut runtime = self.inner.runtime.lock().await;
-            (runtime.cancel.take(), runtime.task.take())
-        };
-        if let Some(cancel) = cancel {
-            cancel.cancel();
-        }
-        if let Some(task) = task {
-            let _ = task.await;
-        }
+        self.stop_capture_and_reset().await;
     }
 
     async fn ensure_task_running(&self) {
         {
             let mut runtime = self.inner.runtime.lock().await;
-            if runtime.task.is_some() {
+            if !self.try_start_capture_locked(&mut runtime) {
                 return;
             }
-            if runtime.owner_lock.is_none() {
-                if let Some(parent) = self.inner.lock_path.parent()
-                    && let Err(err) = std::fs::create_dir_all(parent)
-                {
-                    let mut status = runtime.status.clone();
-                    status.state = ScreenRecordingState::Error;
-                    status.last_error = Some(format!(
-                        "failed to create screen recording lock directory: {err}"
-                    ));
-                    runtime.status = status;
-                    return;
-                }
-                let lock_file = match File::options()
-                    .read(true)
-                    .write(true)
-                    .create(true)
-                    .truncate(false)
-                    .open(&self.inner.lock_path)
-                {
-                    Ok(lock_file) => lock_file,
-                    Err(err) => {
-                        let mut status = runtime.status.clone();
-                        status.state = ScreenRecordingState::Error;
-                        status.last_error =
-                            Some(format!("failed to open screen recording lock file: {err}"));
-                        runtime.status = status;
-                        return;
-                    }
-                };
-                match lock_file.try_lock() {
-                    Ok(()) => {
-                        runtime.owner_lock = Some(lock_file);
-                    }
-                    Err(std::fs::TryLockError::WouldBlock) => {
-                        let mut status = runtime.status.clone();
-                        status.state = ScreenRecordingState::Error;
-                        status.last_error =
-                            Some(SCREEN_RECORDING_OWNED_BY_ANOTHER_PROCESS_MESSAGE.to_string());
-                        status.captured_display_count = 0;
-                        runtime.status = status;
-                        return;
-                    }
-                    Err(err) => {
-                        let mut status = runtime.status.clone();
-                        status.state = ScreenRecordingState::Error;
-                        status.last_error =
-                            Some(format!("failed to lock screen recording owner file: {err}"));
-                        runtime.status = status;
-                        return;
-                    }
-                }
-            }
-            let cancel = CancellationToken::new();
-            let cancel_for_task = cancel.clone();
-            let inner = Arc::clone(&self.inner);
-            runtime.cancel = Some(cancel);
-            runtime.task = Some(tokio::spawn(async move {
-                inner.run(cancel_for_task).await;
-            }));
+            spawn_capture_task(&self.inner, &mut runtime);
         }
         self.inner.wake.notify_waiters();
     }
 
-    async fn stop_capture_and_reset(&self) {
-        let (cancel, task) = {
-            let mut runtime = self.inner.runtime.lock().await;
-            (runtime.cancel.take(), runtime.task.take())
+    fn try_start_capture_locked(&self, runtime: &mut RuntimeState) -> bool {
+        if runtime.task.is_some() {
+            return false;
+        }
+        if runtime.owner_lock.is_some() {
+            return true;
+        }
+        if let Some(parent) = self.inner.lock_path.parent()
+            && let Err(err) = std::fs::create_dir_all(parent)
+        {
+            let mut status = runtime.status.clone();
+            status.state = ScreenRecordingState::Error;
+            status.last_error = Some(format!(
+                "failed to create screen recording lock directory: {err}"
+            ));
+            runtime.status = status;
+            return false;
+        }
+        let lock_file = match File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&self.inner.lock_path)
+        {
+            Ok(lock_file) => lock_file,
+            Err(err) => {
+                let mut status = runtime.status.clone();
+                status.state = ScreenRecordingState::Error;
+                status.last_error =
+                    Some(format!("failed to open screen recording lock file: {err}"));
+                runtime.status = status;
+                return false;
+            }
         };
+        match lock_file.try_lock() {
+            Ok(()) => {
+                if let Err(err) = write_owner_pid(&lock_file) {
+                    let mut status = runtime.status.clone();
+                    status.state = ScreenRecordingState::Error;
+                    status.last_error =
+                        Some(format!("failed to write screen recording owner pid: {err}"));
+                    runtime.status = status;
+                    return false;
+                }
+                runtime.owner_lock = Some(lock_file);
+                runtime.status.state = if runtime.paused {
+                    ScreenRecordingState::Paused
+                } else {
+                    ScreenRecordingState::Starting
+                };
+                runtime.status.paused = runtime.paused;
+                runtime.status.last_error = None;
+                true
+            }
+            Err(std::fs::TryLockError::WouldBlock) => {
+                let owner_pid = read_owner_pid(&lock_file).ok();
+                let mut status = runtime.status.clone();
+                status.state = ScreenRecordingState::Error;
+                status.last_error = Some(match owner_pid {
+                    Some(pid) => {
+                        format!("{SCREEN_RECORDING_OWNED_BY_ANOTHER_PROCESS_MESSAGE} (pid {pid})")
+                    }
+                    None => SCREEN_RECORDING_OWNED_BY_ANOTHER_PROCESS_MESSAGE.to_string(),
+                });
+                status.captured_display_count = 0;
+                runtime.status = status;
+                if runtime.lock_retry.is_none() {
+                    let manager = ScreenRecordingManager {
+                        inner: Arc::clone(&self.inner),
+                    };
+                    let cancel = CancellationToken::new();
+                    let cancel_for_task = cancel.clone();
+                    runtime.lock_retry_cancel = Some(cancel);
+                    runtime.lock_retry = Some(tokio::spawn(async move {
+                        loop {
+                            tokio::select! {
+                                _ = cancel_for_task.cancelled() => break,
+                                _ = tokio::time::sleep(LOCK_RETRY_INTERVAL) => {}
+                            }
+
+                            let should_continue = {
+                                let mut runtime = manager.inner.runtime.lock().await;
+                                if !runtime.feature_enabled
+                                    || !runtime.config_enabled
+                                    || runtime.task.is_some()
+                                {
+                                    runtime.lock_retry = None;
+                                    runtime.lock_retry_cancel = None;
+                                    false
+                                } else {
+                                    let started = manager.try_start_capture_locked(&mut runtime);
+                                    if started {
+                                        spawn_capture_task(&manager.inner, &mut runtime);
+                                        runtime.lock_retry = None;
+                                        runtime.lock_retry_cancel = None;
+                                        manager.inner.wake.notify_waiters();
+                                        false
+                                    } else {
+                                        true
+                                    }
+                                }
+                            };
+                            if !should_continue {
+                                break;
+                            }
+                        }
+                    }));
+                }
+                false
+            }
+            Err(err) => {
+                let mut status = runtime.status.clone();
+                status.state = ScreenRecordingState::Error;
+                status.last_error =
+                    Some(format!("failed to lock screen recording owner file: {err}"));
+                runtime.status = status;
+                false
+            }
+        }
+    }
+
+    async fn stop_capture_and_reset(&self) {
+        let (cancel, task, lock_retry_cancel, lock_retry) = {
+            let mut runtime = self.inner.runtime.lock().await;
+            (
+                runtime.cancel.take(),
+                runtime.task.take(),
+                runtime.lock_retry_cancel.take(),
+                runtime.lock_retry.take(),
+            )
+        };
+        if let Some(lock_retry_cancel) = lock_retry_cancel {
+            lock_retry_cancel.cancel();
+        }
+        if let Some(lock_retry) = lock_retry {
+            let _ = lock_retry.await;
+        }
         if let Some(cancel) = cancel {
             cancel.cancel();
         }
@@ -530,6 +609,46 @@ fn fingerprint(status: &ScreenRecordingStatus) -> StatusFingerprint {
         permission: status.permission,
         captured_display_count: status.captured_display_count,
         last_error: status.last_error.clone(),
+    }
+}
+
+fn spawn_capture_task(inner: &Arc<Inner>, runtime: &mut RuntimeState) {
+    let cancel = CancellationToken::new();
+    let cancel_for_task = cancel.clone();
+    let inner = Arc::clone(inner);
+    runtime.cancel = Some(cancel);
+    runtime.task = Some(tokio::spawn(async move {
+        inner.run(cancel_for_task).await;
+    }));
+}
+
+fn write_owner_pid(mut lock_file: &File) -> std::io::Result<()> {
+    lock_file.set_len(0)?;
+    lock_file.seek(SeekFrom::Start(0))?;
+    writeln!(lock_file, "{}", std::process::id())?;
+    lock_file.sync_all()
+}
+
+fn read_owner_pid(mut lock_file: &File) -> std::io::Result<u32> {
+    let mut last_err = None;
+    for _attempt in 0..5 {
+        lock_file.seek(SeekFrom::Start(0))?;
+        let mut contents = String::new();
+        lock_file.read_to_string(&mut contents)?;
+        match contents.trim().parse::<u32>() {
+            Ok(pid) => return Ok(pid),
+            Err(err) => {
+                last_err = Some(err);
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+    }
+    match last_err {
+        Some(err) => Err(std::io::Error::new(ErrorKind::InvalidData, err)),
+        None => Err(std::io::Error::new(
+            ErrorKind::UnexpectedEof,
+            "screen recording lock file was empty",
+        )),
     }
 }
 
@@ -730,7 +849,9 @@ mod tests {
             Some(SCREEN_RECORDING_FEATURE_DISABLED_MESSAGE)
         );
 
-        let running = manager.reconcile(true, true).await;
+        let running = manager
+            .reconcile(/*feature_enabled*/ true, /*config_enabled*/ true)
+            .await;
         assert_eq!(running.state, ScreenRecordingState::Starting);
         let running = wait_for_state(&manager, ScreenRecordingState::Running).await;
         assert_eq!(running.captured_display_count, 1);
@@ -778,9 +899,13 @@ mod tests {
         };
 
         assert_eq!(owner_status.captured_display_count, 1);
+        let expected_non_owner_error = format!(
+            "{SCREEN_RECORDING_OWNED_BY_ANOTHER_PROCESS_MESSAGE} (pid {})",
+            std::process::id()
+        );
         assert_eq!(
             non_owner_status.last_error.as_deref(),
-            Some(SCREEN_RECORDING_OWNED_BY_ANOTHER_PROCESS_MESSAGE)
+            Some(expected_non_owner_error.as_str())
         );
         assert_eq!(non_owner_status.captured_display_count, 0);
 
@@ -795,5 +920,216 @@ mod tests {
         assert_eq!(disabled.state, ScreenRecordingState::Disabled);
         assert!(!owner_storage_path.as_path().exists());
         owner.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn lock_failover_retries_and_only_one_successor_wins() {
+        let temp_dir = TempDir::new().expect("tmpdir");
+        let (tx_a, _rx_a) = mpsc::channel::<OutgoingEnvelope>(8);
+        let (tx_b, _rx_b) = mpsc::channel::<OutgoingEnvelope>(8);
+        let (tx_c, _rx_c) = mpsc::channel::<OutgoingEnvelope>(8);
+        let manager_a = ScreenRecordingManager::new_with_backend(
+            Arc::new(OutgoingMessageSender::new(tx_a)),
+            temp_dir.path(),
+            true,
+            true,
+            successful_backend(),
+        );
+        let manager_b = ScreenRecordingManager::new_with_backend(
+            Arc::new(OutgoingMessageSender::new(tx_b)),
+            temp_dir.path(),
+            true,
+            true,
+            successful_backend(),
+        );
+        let manager_c = ScreenRecordingManager::new_with_backend(
+            Arc::new(OutgoingMessageSender::new(tx_c)),
+            temp_dir.path(),
+            true,
+            true,
+            successful_backend(),
+        );
+
+        let initial_deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let running = [
+                manager_a.current_status().await.state,
+                manager_b.current_status().await.state,
+                manager_c.current_status().await.state,
+            ]
+            .into_iter()
+            .filter(|state| *state == ScreenRecordingState::Running)
+            .count();
+            if running == 1 {
+                break;
+            }
+            assert!(
+                Instant::now() < initial_deadline,
+                "timed out waiting for initial owner"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        let was_owner_a = manager_a.current_status().await.state == ScreenRecordingState::Running;
+        let was_owner_b = manager_b.current_status().await.state == ScreenRecordingState::Running;
+        let was_owner_c = manager_c.current_status().await.state == ScreenRecordingState::Running;
+        if was_owner_a {
+            manager_a.shutdown().await;
+        } else if was_owner_b {
+            manager_b.shutdown().await;
+        } else {
+            manager_c.shutdown().await;
+        }
+
+        let failover_deadline = Instant::now() + LOCK_RETRY_INTERVAL + Duration::from_secs(3);
+        loop {
+            let mut states = Vec::new();
+            if !was_owner_a {
+                states.push(manager_a.current_status().await.state);
+            }
+            if !was_owner_b {
+                states.push(manager_b.current_status().await.state);
+            }
+            if !was_owner_c {
+                states.push(manager_c.current_status().await.state);
+            }
+            let running = states
+                .iter()
+                .filter(|state| **state == ScreenRecordingState::Running)
+                .count();
+            if running == 1 {
+                break;
+            }
+            assert!(
+                Instant::now() < failover_deadline,
+                "timed out waiting for exactly one successor to acquire lock, states={states:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        manager_a.shutdown().await;
+        manager_b.shutdown().await;
+        manager_c.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn same_process_contention_reports_own_pid() {
+        let temp_dir = TempDir::new().expect("tmpdir");
+        let (tx_a, _rx_a) = mpsc::channel::<OutgoingEnvelope>(8);
+        let (tx_b, _rx_b) = mpsc::channel::<OutgoingEnvelope>(8);
+        let manager_a = ScreenRecordingManager::new_with_backend(
+            Arc::new(OutgoingMessageSender::new(tx_a)),
+            temp_dir.path(),
+            true,
+            true,
+            successful_backend(),
+        );
+        let manager_b = ScreenRecordingManager::new_with_backend(
+            Arc::new(OutgoingMessageSender::new(tx_b)),
+            temp_dir.path(),
+            true,
+            true,
+            successful_backend(),
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let contended = loop {
+            let status_a = manager_a.current_status().await;
+            let status_b = manager_b.current_status().await;
+            match (status_a.state, status_b.state) {
+                (ScreenRecordingState::Running, ScreenRecordingState::Error) => break status_b,
+                (ScreenRecordingState::Error, ScreenRecordingState::Running) => break status_a,
+                _ => {}
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timed out waiting for same-process contention"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        };
+
+        assert_eq!(
+            contended.last_error.as_deref(),
+            Some(
+                format!(
+                    "{SCREEN_RECORDING_OWNED_BY_ANOTHER_PROCESS_MESSAGE} (pid {})",
+                    std::process::id()
+                )
+                .as_str()
+            )
+        );
+
+        manager_a.shutdown().await;
+        manager_b.shutdown().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shutdown_contender_does_not_reacquire_lock_after_owner_exits() {
+        let temp_dir = TempDir::new().expect("tmpdir");
+        let (tx_a, _rx_a) = mpsc::channel::<OutgoingEnvelope>(8);
+        let owner = ScreenRecordingManager::new_with_backend(
+            Arc::new(OutgoingMessageSender::new(tx_a)),
+            temp_dir.path(),
+            true,
+            true,
+            successful_backend(),
+        );
+        let _owner_running = wait_for_state(&owner, ScreenRecordingState::Running).await;
+
+        let (tx_b, _rx_b) = mpsc::channel::<OutgoingEnvelope>(8);
+        let transient = ScreenRecordingManager::new_with_backend(
+            Arc::new(OutgoingMessageSender::new(tx_b)),
+            temp_dir.path(),
+            true,
+            true,
+            successful_backend(),
+        );
+        let transient_error = wait_for_state(&transient, ScreenRecordingState::Error).await;
+        assert_eq!(
+            transient_error.last_error.as_deref(),
+            Some(
+                format!(
+                    "{SCREEN_RECORDING_OWNED_BY_ANOTHER_PROCESS_MESSAGE} (pid {})",
+                    std::process::id()
+                )
+                .as_str()
+            )
+        );
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        transient.shutdown().await;
+
+        let (tx_c, _rx_c) = mpsc::channel::<OutgoingEnvelope>(8);
+        let main = ScreenRecordingManager::new_with_backend(
+            Arc::new(OutgoingMessageSender::new(tx_c)),
+            temp_dir.path(),
+            true,
+            true,
+            successful_backend(),
+        );
+        let _main_error = wait_for_state(&main, ScreenRecordingState::Error).await;
+
+        owner.shutdown().await;
+
+        let failover_deadline = Instant::now() + LOCK_RETRY_INTERVAL + Duration::from_secs(3);
+        loop {
+            let main_status = main.current_status().await;
+            if main_status.state == ScreenRecordingState::Running {
+                break;
+            }
+            let transient_status = transient.current_status().await;
+            assert_ne!(
+                transient_status.state,
+                ScreenRecordingState::Running,
+                "shut down transient manager should not reacquire the recording lock"
+            );
+            assert!(
+                Instant::now() < failover_deadline,
+                "timed out waiting for main manager to acquire lock after owner exit, main={main_status:?}, transient={transient_status:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        main.shutdown().await;
     }
 }

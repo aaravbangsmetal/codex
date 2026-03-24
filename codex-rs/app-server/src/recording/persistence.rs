@@ -4,13 +4,18 @@ use super::backend::CapturedDisplay;
 use super::backend::DisplayGeometry;
 use super::encoder::FfmpegSegmentEncoder;
 use chrono::DateTime;
-use chrono::Local;
 use chrono::Utc;
+use image::ColorType;
+use image::ImageEncoder;
+use image::codecs::jpeg::JpegEncoder;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
+use std::fs::File;
+use std::io::BufWriter;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
 use walkdir::WalkDir;
@@ -20,7 +25,7 @@ pub(crate) const RETENTION_HOURS: u32 = 6;
 pub(crate) const RETENTION_SECONDS: i64 = 6 * 60 * 60;
 pub(crate) const SEGMENT_LENGTH_SECONDS: i64 = 30 * 60;
 pub(crate) const DISPLAY_REMOVAL_MISSED_TICKS: u32 = 3;
-const MANIFEST_FILE_NAME: &str = "manifest.json";
+const MANIFEST_FILE_EXTENSION: &str = "mp4.json";
 
 #[derive(Default)]
 pub(crate) struct CaptureState {
@@ -42,7 +47,8 @@ struct DisplayStream {
 }
 
 struct SegmentState {
-    directory: PathBuf,
+    manifest_path: PathBuf,
+    latest_frame_path: PathBuf,
     bucket_start_at: i64,
     encoder: FfmpegSegmentEncoder,
 }
@@ -53,7 +59,7 @@ enum SegmentReason {
     Started,
     Hotplugged,
     GeometryChanged,
-    TimeBucketChanged,
+    Rotated,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,7 +72,7 @@ struct SegmentManifest {
     rotation_millidegrees: i32,
     scale_factor_milli: u32,
     segment_started_at: i64,
-    segment_reason: SegmentReason,
+    started_reason: SegmentReason,
     frame_count: u64,
     newest_frame_at: Option<i64>,
 }
@@ -87,7 +93,7 @@ pub(crate) fn capture_tick(
     for display in displays {
         let stream = upsert_display_stream(storage_root, state, &display, captured_at)
             .map_err(|err| CaptureBackendFailure::other(err.to_string()))?;
-        write_frame(stream, &display, captured_at)
+        write_frame(storage_root, stream, &display, captured_at)
             .map_err(|err| CaptureBackendFailure::other(err.to_string()))?;
         newest_frame_at = Some(
             newest_frame_at
@@ -133,7 +139,13 @@ pub(crate) fn prune_old_segments(
     let manifest_paths = WalkDir::new(storage_root)
         .into_iter()
         .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_file() && entry.file_name() == MANIFEST_FILE_NAME)
+        .filter(|entry| {
+            entry.file_type().is_file()
+                && entry
+                    .path()
+                    .to_str()
+                    .is_some_and(|path| path.ends_with(".mp4.json"))
+        })
         .map(walkdir::DirEntry::into_path)
         .collect::<Vec<_>>();
 
@@ -147,25 +159,11 @@ pub(crate) fn prune_old_segments(
         let newest_frame_at = manifest
             .newest_frame_at
             .unwrap_or(manifest.segment_started_at);
-        if newest_frame_at < cutoff
-            && let Some(segment_dir) = manifest_path.parent()
-        {
-            let _ = fs::remove_file(segment_dir.with_extension("mp4"));
-            let _ = fs::remove_dir_all(segment_dir);
-        }
-    }
-
-    let directories = WalkDir::new(storage_root)
-        .min_depth(1)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_dir())
-        .map(walkdir::DirEntry::into_path)
-        .collect::<Vec<_>>();
-
-    for directory in directories.into_iter().rev() {
-        if directory.read_dir()?.next().is_none() {
-            let _ = fs::remove_dir(&directory);
+        if newest_frame_at < cutoff {
+            if let Some(segment_path) = segment_path_for_manifest(&manifest_path) {
+                let _ = fs::remove_file(segment_path);
+            }
+            let _ = fs::remove_file(&manifest_path);
         }
     }
 
@@ -192,7 +190,7 @@ fn upsert_display_stream<'a>(
         if stream.geometry != display.geometry {
             Some(SegmentReason::GeometryChanged)
         } else if stream.segment.bucket_start_at != bucket_start_at {
-            Some(SegmentReason::TimeBucketChanged)
+            Some(SegmentReason::Rotated)
         } else {
             None
         }
@@ -242,18 +240,16 @@ fn open_segment(
     captured_at: DateTime<Utc>,
     reason: SegmentReason,
 ) -> std::io::Result<SegmentState> {
-    let local = captured_at.with_timezone(&Local);
     let bucket_start_at = bucket_start_at(captured_at);
     let encoded_width = display.frame.width();
     let encoded_height = display.frame.height();
     let segment_name = format!(
-        "{}-display-{}-{}",
-        local.format("%Y-%m-%dT%H-%M-%S"),
-        display.id,
-        segment_reason_name(reason)
+        "{}-display-{}",
+        captured_at.format("%Y-%m-%dT%H-%M-%SZ"),
+        display.id
     );
-    let segment_dir = storage_root.join(&segment_name);
-    fs::create_dir_all(&segment_dir)?;
+    let segment_path = storage_root.join(format!("{segment_name}.mp4"));
+    let manifest_path = segment_path.with_extension(MANIFEST_FILE_EXTENSION);
     let manifest = SegmentManifest {
         version: 1,
         display_id: display.id.clone(),
@@ -263,22 +259,23 @@ fn open_segment(
         rotation_millidegrees: display.geometry.rotation_millidegrees,
         scale_factor_milli: display.geometry.scale_factor_milli,
         segment_started_at: captured_at.timestamp(),
-        segment_reason: reason,
+        started_reason: reason,
         frame_count: 0,
         newest_frame_at: None,
     };
-    write_manifest(&segment_dir, &manifest)?;
-    let segment_path = storage_root.join(format!("{segment_name}.mp4"));
+    write_manifest(&manifest_path, &manifest)?;
     let encoder =
         FfmpegSegmentEncoder::open(&segment_path, encoded_width, encoded_height, CAPTURE_FPS)?;
     Ok(SegmentState {
-        directory: segment_dir,
+        manifest_path,
+        latest_frame_path: storage_root.join(format!("{segment_name}-latest.jpg")),
         bucket_start_at,
         encoder,
     })
 }
 
 fn write_frame(
+    _storage_root: &Path,
     stream: &mut DisplayStream,
     display: &CapturedDisplay,
     captured_at: DateTime<Utc>,
@@ -287,33 +284,54 @@ fn write_frame(
         .segment
         .encoder
         .write_rgba_frame(display.frame.as_raw())?;
+    write_latest_frame(&stream.segment.latest_frame_path, display)?;
 
-    let manifest_path = stream.segment.directory.join(MANIFEST_FILE_NAME);
-    let manifest_bytes = fs::read(&manifest_path)?;
+    let manifest_bytes = fs::read(&stream.segment.manifest_path)?;
     let mut manifest: SegmentManifest =
         serde_json::from_slice(&manifest_bytes).map_err(std::io::Error::other)?;
     manifest.frame_count = manifest.frame_count.saturating_add(1);
     manifest.newest_frame_at = Some(captured_at.timestamp());
-    write_manifest(&stream.segment.directory, &manifest)
+    write_manifest(&stream.segment.manifest_path, &manifest)
 }
 
-fn write_manifest(segment_dir: &Path, manifest: &SegmentManifest) -> std::io::Result<()> {
+fn write_latest_frame(frame_path: &Path, display: &CapturedDisplay) -> std::io::Result<()> {
+    let temp_path = frame_path.with_extension("jpg.tmp");
+    let file = File::create(&temp_path)?;
+    let mut writer = BufWriter::new(file);
+    let rgb_frame = image::DynamicImage::ImageRgba8(display.frame.clone()).into_rgb8();
+    let encoder = JpegEncoder::new_with_quality(&mut writer, 85);
+    let result = encoder
+        .write_image(
+            rgb_frame.as_raw(),
+            rgb_frame.width(),
+            rgb_frame.height(),
+            ColorType::Rgb8.into(),
+        )
+        .map_err(std::io::Error::other)
+        .and_then(|()| {
+            writer.flush()?;
+            writer.get_ref().sync_all()
+        })
+        .and_then(|()| fs::rename(&temp_path, frame_path));
+    if result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    result
+}
+
+fn write_manifest(manifest_path: &Path, manifest: &SegmentManifest) -> std::io::Result<()> {
     let bytes = serde_json::to_vec(manifest).map_err(std::io::Error::other)?;
-    fs::write(segment_dir.join(MANIFEST_FILE_NAME), bytes)
+    fs::write(manifest_path, bytes)
+}
+
+fn segment_path_for_manifest(manifest_path: &Path) -> Option<PathBuf> {
+    let path = manifest_path.to_str()?;
+    Some(PathBuf::from(path.strip_suffix(".json")?))
 }
 
 fn bucket_start_at(captured_at: DateTime<Utc>) -> i64 {
     let timestamp = captured_at.timestamp();
     timestamp - (timestamp % SEGMENT_LENGTH_SECONDS)
-}
-
-fn segment_reason_name(reason: SegmentReason) -> &'static str {
-    match reason {
-        SegmentReason::Started => "started",
-        SegmentReason::Hotplugged => "hotplugged",
-        SegmentReason::GeometryChanged => "geometry",
-        SegmentReason::TimeBucketChanged => "time-bucket",
-    }
 }
 
 #[cfg(test)]
@@ -434,13 +452,19 @@ mod tests {
         let segment_count = WalkDir::new(tmp.path())
             .into_iter()
             .filter_map(Result::ok)
-            .filter(|entry| entry.file_type().is_dir() && entry.depth() == 1)
+            .filter(|entry| {
+                entry.file_type().is_file()
+                    && entry
+                        .path()
+                        .extension()
+                        .is_some_and(|extension| extension == "mp4")
+            })
             .count();
         assert_eq!(segment_count, 2);
     }
 
     #[test]
-    fn writes_mp4_segments_instead_of_jpeg_frames() {
+    fn writes_mp4_segments_with_per_segment_latest_jpeg() {
         let tmp = TempDir::new().expect("tmpdir");
         let backend = SequenceBackend::new(vec![Ok(vec![display("1", 64, 48)])]);
         let mut state = CaptureState::default();
@@ -470,6 +494,21 @@ mod tests {
         assert_eq!(mp4_files.len(), 1);
         assert_eq!(mp4_files[0].parent(), Some(tmp.path()));
         assert!(fs::metadata(&mp4_files[0]).expect("segment metadata").len() > 0);
+
+        let latest_frame_path = mp4_files[0].with_file_name(format!(
+            "{}-latest.jpg",
+            mp4_files[0]
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .expect("utf8 mp4 stem")
+        ));
+        assert!(latest_frame_path.exists());
+        assert!(
+            fs::metadata(&latest_frame_path)
+                .expect("latest frame metadata")
+                .len()
+                > 0
+        );
     }
 
     #[test]
@@ -489,7 +528,13 @@ mod tests {
         let manifest_path = WalkDir::new(tmp.path())
             .into_iter()
             .filter_map(Result::ok)
-            .find(|entry| entry.file_type().is_file() && entry.file_name() == MANIFEST_FILE_NAME)
+            .find(|entry| {
+                entry.file_type().is_file()
+                    && entry
+                        .path()
+                        .to_str()
+                        .is_some_and(|path| path.ends_with(".mp4.json"))
+            })
             .expect("manifest")
             .into_path();
         let manifest: SegmentManifest =
@@ -502,7 +547,7 @@ mod tests {
     }
 
     #[test]
-    fn segment_directories_are_flat_timestamped_folders() {
+    fn segment_files_are_flat_utc_timestamped_files() {
         let tmp = TempDir::new().expect("tmpdir");
         let backend = SequenceBackend::new(vec![
             Ok(vec![display("1", 64, 48)]),
@@ -529,31 +574,25 @@ mod tests {
         )
         .expect("second capture");
 
-        let mut segment_dirs = WalkDir::new(tmp.path())
+        let mut segment_files = WalkDir::new(tmp.path())
             .into_iter()
             .filter_map(Result::ok)
-            .filter(|entry| entry.file_type().is_dir() && entry.depth() == 1)
+            .filter(|entry| {
+                entry.file_type().is_file()
+                    && entry
+                        .path()
+                        .extension()
+                        .is_some_and(|extension| extension == "mp4")
+            })
             .map(|entry| entry.file_name().to_string_lossy().into_owned())
             .collect::<Vec<_>>();
-        segment_dirs.sort();
+        segment_files.sort();
 
-        let first_local = DateTime::parse_from_rfc3339("2026-03-23T23:59:59Z")
-            .expect("parse")
-            .with_timezone(&Local);
-        let second_local = DateTime::parse_from_rfc3339("2026-03-24T00:00:01Z")
-            .expect("parse")
-            .with_timezone(&Local);
         assert_eq!(
-            segment_dirs,
+            segment_files,
             vec![
-                format!(
-                    "{}-display-1-started",
-                    first_local.format("%Y-%m-%dT%H-%M-%S")
-                ),
-                format!(
-                    "{}-display-1-time-bucket",
-                    second_local.format("%Y-%m-%dT%H-%M-%S")
-                ),
+                "2026-03-23T23-59-59Z-display-1.mp4".to_string(),
+                "2026-03-24T00-00-01Z-display-1.mp4".to_string(),
             ]
         );
     }
@@ -561,10 +600,11 @@ mod tests {
     #[test]
     fn prune_removes_old_segments() {
         let tmp = TempDir::new().expect("tmpdir");
-        let old_segment = tmp.path().join("2026-03-20T00-00-00-display-1-started");
-        fs::create_dir_all(&old_segment).expect("create old segment");
+        let old_segment = tmp.path().join("2026-03-20T00-00-00Z-display-1.mp4");
+        fs::write(&old_segment, b"fake mp4").expect("create old segment");
+        let old_manifest = old_segment.with_extension(MANIFEST_FILE_EXTENSION);
         write_manifest(
-            &old_segment,
+            &old_manifest,
             &SegmentManifest {
                 version: 1,
                 display_id: "1".to_string(),
@@ -574,7 +614,7 @@ mod tests {
                 rotation_millidegrees: 0,
                 scale_factor_milli: 1000,
                 segment_started_at: 1_700_000_000,
-                segment_reason: SegmentReason::Started,
+                started_reason: SegmentReason::Started,
                 frame_count: 1,
                 newest_frame_at: Some(1_700_000_000),
             },
@@ -588,6 +628,7 @@ mod tests {
         .expect("prune");
 
         assert!(!old_segment.exists());
+        assert!(!old_manifest.exists());
     }
 
     #[test]
