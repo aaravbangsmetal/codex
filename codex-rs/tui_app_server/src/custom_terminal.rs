@@ -497,6 +497,31 @@ where
     }
 }
 
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+
+    pub(crate) fn new_terminal<B>(
+        backend: B,
+        screen_size: Size,
+        cursor_pos: Position,
+    ) -> Terminal<B>
+    where
+        B: Backend + Write,
+    {
+        Terminal {
+            backend,
+            buffers: [Buffer::empty(Rect::ZERO), Buffer::empty(Rect::ZERO)],
+            current: 0,
+            hidden_cursor: false,
+            viewport_area: Rect::ZERO,
+            last_known_screen_size: screen_size,
+            last_known_cursor_pos: cursor_pos,
+            visible_history_rows: 0,
+        }
+    }
+}
+
 use ratatui::buffer::Cell;
 
 #[derive(Debug, IsVariant)]

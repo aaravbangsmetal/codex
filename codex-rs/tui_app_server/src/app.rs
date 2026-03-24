@@ -4925,7 +4925,7 @@ impl App {
                 self.active_non_primary_shutdown_target(notification)
         {
             self.mark_agent_picker_thread_closed(closed_thread_id);
-            self.select_agent_thread(tui, app_server, primary_thread_id)
+            self.select_agent_thread_and_discard_btw_chain(tui, app_server, primary_thread_id)
                 .await?;
             if self.active_thread_id == Some(primary_thread_id) {
                 self.chat_widget.add_info_message(
@@ -7661,6 +7661,57 @@ guardian_approval = true
             app.active_non_primary_shutdown_target(&thread_closed_notification(active_thread_id)),
             Some((active_thread_id, primary_thread_id))
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unexpected_btw_child_close_discards_btw_chain() -> Result<()> {
+        let mut app = make_test_app().await;
+        let mut tui = crate::tui::test_support::new_test_tui();
+        let mut app_server =
+            crate::start_embedded_app_server_for_picker(app.chat_widget.config_ref())
+                .await
+                .expect("embedded app server");
+        let parent_thread_id = ThreadId::new();
+        let child_thread_id = ThreadId::new();
+
+        {
+            let channel = app.ensure_thread_channel(parent_thread_id);
+            let mut store = channel.store.lock().await;
+            store.set_session(
+                test_thread_session(parent_thread_id, PathBuf::from("/tmp")),
+                Vec::new(),
+            );
+        }
+        {
+            let channel = app.ensure_thread_channel(child_thread_id);
+            let mut store = channel.store.lock().await;
+            store.set_session(
+                test_thread_session(child_thread_id, PathBuf::from("/tmp")),
+                Vec::new(),
+            );
+        }
+        app.primary_thread_id = Some(parent_thread_id);
+        app.btw_threads.insert(
+            child_thread_id,
+            BtwThreadState {
+                parent_thread_id,
+                next_fork_banner_parent_label: None,
+            },
+        );
+        app.activate_thread_channel(child_thread_id).await;
+
+        app.handle_active_thread_event(
+            &mut tui,
+            &mut app_server,
+            ThreadBufferedEvent::Notification(thread_closed_notification(child_thread_id)),
+        )
+        .await?;
+
+        assert_eq!(app.active_thread_id, Some(parent_thread_id));
+        assert_eq!(app.active_btw_parent_thread_id(), None);
+        assert!(!app.thread_event_channels.contains_key(&child_thread_id));
+        assert!(!app.btw_threads.contains_key(&child_thread_id));
         Ok(())
     }
 

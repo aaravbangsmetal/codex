@@ -544,3 +544,36 @@ impl Tui {
         Ok(None)
     }
 }
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+
+    pub(crate) fn new_test_tui() -> Tui {
+        let terminal = crate::custom_terminal::test_support::new_terminal(
+            CrosstermBackend::new(stdout()),
+            ratatui::layout::Size {
+                width: 80,
+                height: 24,
+            },
+            ratatui::layout::Position { x: 0, y: 0 },
+        );
+        let (draw_tx, _) = broadcast::channel(1);
+        let frame_requester = FrameRequester::new(draw_tx.clone());
+        Tui {
+            frame_requester,
+            draw_tx,
+            event_broker: Arc::new(EventBroker::new()),
+            terminal,
+            pending_history_lines: vec![],
+            alt_saved_viewport: None,
+            #[cfg(unix)]
+            suspend_context: SuspendContext::new(),
+            alt_screen_active: Arc::new(AtomicBool::new(false)),
+            terminal_focused: Arc::new(AtomicBool::new(true)),
+            enhanced_keys_supported: false,
+            notification_backend: None,
+            alt_screen_enabled: true,
+        }
+    }
+}
