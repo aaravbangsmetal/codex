@@ -1,6 +1,6 @@
 use super::*;
-use crate::truncate;
-use crate::truncate::TruncationPolicy;
+use crate::output_truncation;
+use crate::output_truncation::TruncationPolicy;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_git_utils::GhostCommit;

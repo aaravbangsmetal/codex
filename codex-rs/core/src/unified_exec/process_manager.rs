@@ -15,6 +15,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
+use crate::output_truncation::approx_token_count;
 use crate::protocol::ExecCommandSource;
 use crate::sandboxing::ExecRequest;
 use crate::tools::context::ExecCommandToolOutput;
@@ -27,7 +28,6 @@ use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
 use crate::tools::sandboxing::ToolCtx;
-use crate::truncate::approx_token_count;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::MAX_UNIFIED_EXEC_PROCESSES;
 use crate::unified_exec::MAX_YIELD_TIME_MS;

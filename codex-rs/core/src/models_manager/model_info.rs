@@ -10,7 +10,7 @@ use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::openai_models::default_input_modalities;
 
 use crate::config::Config;
-use crate::truncate::approx_bytes_for_tokens;
+use crate::output_truncation::approx_bytes_for_tokens;
 use codex_features::Feature;
 use tracing::warn;
 

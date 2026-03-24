@@ -1,11 +1,11 @@
 use crate::client_common::tools::ToolSearchOutputTool;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::output_truncation::TruncationPolicy;
+use crate::output_truncation::formatted_truncate_text;
 use crate::tools::TELEMETRY_PREVIEW_MAX_BYTES;
 use crate::tools::TELEMETRY_PREVIEW_MAX_LINES;
 use crate::tools::TELEMETRY_PREVIEW_TRUNCATION_NOTICE;
-use crate::truncate::TruncationPolicy;
-use crate::truncate::formatted_truncate_text;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::resolve_max_tokens;
 use codex_protocol::mcp::CallToolResult;

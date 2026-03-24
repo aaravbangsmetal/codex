@@ -1,12 +1,12 @@
 use crate::codex::TurnContext;
 use crate::context_manager::normalize;
 use crate::event_mapping::is_contextual_user_message_content;
-use crate::truncate::TruncationPolicy;
-use crate::truncate::approx_bytes_for_tokens;
-use crate::truncate::approx_token_count;
-use crate::truncate::approx_tokens_from_byte_count_i64;
-use crate::truncate::truncate_function_output_items_with_policy;
-use crate::truncate::truncate_text;
+use crate::output_truncation::TruncationPolicy;
+use crate::output_truncation::approx_bytes_for_tokens;
+use crate::output_truncation::approx_token_count;
+use crate::output_truncation::approx_tokens_from_byte_count_i64;
+use crate::output_truncation::truncate_function_output_items_with_policy;
+use crate::output_truncation::truncate_text;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::models::BaseInstructions;

@@ -77,8 +77,7 @@ mod stream_events_utils;
 pub mod test_support;
 mod text_encoding;
 pub use codex_login::token_data;
-#[path = "output_truncation.rs"]
-mod truncate;
+mod output_truncation;
 mod unified_exec;
 pub mod windows_sandbox;
 pub use client::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;

@@ -1,64 +1,17 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MiddleTruncation<'a> {
-    pub prefix: &'a str,
-    pub suffix: &'a str,
-    pub removed_bytes: usize,
-    pub removed_chars: usize,
-}
-
-impl MiddleTruncation<'_> {
-    pub fn into_string(self, marker: &str) -> String {
-        let mut out =
-            String::with_capacity(self.prefix.len() + marker.len() + self.suffix.len() + 1);
-        out.push_str(self.prefix);
-        out.push_str(marker);
-        out.push_str(self.suffix);
-        out
-    }
-}
+//! Utilities for truncating large chunks of output while preserving a prefix
+//! and suffix on UTF-8 boundaries.
 
 const APPROX_BYTES_PER_TOKEN: usize = 4;
 
-/// Truncate the middle of a UTF-8 string to fit within `max_bytes`, preserving
-/// a prefix and suffix on character boundaries.
-pub fn truncate_middle_with_byte_budget(s: &str, max_bytes: usize) -> Option<MiddleTruncation<'_>> {
-    if s.is_empty() || s.len() <= max_bytes {
-        return None;
-    }
-
-    if max_bytes == 0 {
-        return Some(MiddleTruncation {
-            prefix: "",
-            suffix: "",
-            removed_bytes: s.len(),
-            removed_chars: s.chars().count(),
-        });
-    }
-
-    let (left_budget, right_budget) = split_budget(max_bytes);
-    let (removed_chars, prefix, suffix) = split_string(s, left_budget, right_budget);
-
-    Some(MiddleTruncation {
-        prefix,
-        suffix,
-        removed_bytes: s.len().saturating_sub(max_bytes),
-        removed_chars,
-    })
-}
-
 /// Truncate a string to `max_bytes` using a character-count marker.
 pub fn truncate_middle_chars(s: &str, max_bytes: usize) -> String {
-    let Some(truncation) = truncate_middle_with_byte_budget(s, max_bytes) else {
-        return s.to_string();
-    };
-
-    let removed_chars = u64::try_from(truncation.removed_chars).unwrap_or(u64::MAX);
-    let marker = format!("…{removed_chars} chars truncated…");
-    truncation.into_string(&marker)
+    truncate_with_byte_estimate(s, max_bytes, false)
 }
 
 /// Truncate the middle of a UTF-8 string to at most `max_tokens` approximate
-/// tokens, preserving the beginning and the end.
+/// tokens, preserving the beginning and the end. Returns the possibly
+/// truncated string and `Some(original_token_count)` if truncation occurred;
+/// otherwise returns the original string and `None`.
 pub fn truncate_middle_with_token_budget(s: &str, max_tokens: usize) -> (String, Option<u64>) {
     if s.is_empty() {
         return (String::new(), None);
@@ -68,14 +21,7 @@ pub fn truncate_middle_with_token_budget(s: &str, max_tokens: usize) -> (String,
         return (s.to_string(), None);
     }
 
-    let Some(truncation) = truncate_middle_with_byte_budget(s, approx_bytes_for_tokens(max_tokens))
-    else {
-        return (s.to_string(), None);
-    };
-
-    let removed_tokens = approx_tokens_from_byte_count(truncation.removed_bytes);
-    let marker = format!("…{removed_tokens} tokens truncated…");
-    let truncated = truncation.into_string(&marker);
+    let truncated = truncate_with_byte_estimate(s, approx_bytes_for_tokens(max_tokens), true);
     let total_tokens = u64::try_from(approx_token_count(s)).unwrap_or(u64::MAX);
 
     if truncated == s {
@@ -83,6 +29,39 @@ pub fn truncate_middle_with_token_budget(s: &str, max_tokens: usize) -> (String,
     } else {
         (truncated, Some(total_tokens))
     }
+}
+
+fn truncate_with_byte_estimate(s: &str, max_bytes: usize, use_tokens: bool) -> String {
+    if s.is_empty() {
+        return String::new();
+    }
+
+    let total_chars = s.chars().count();
+
+    if max_bytes == 0 {
+        return format_truncation_marker(
+            use_tokens,
+            removed_units(use_tokens, s.len(), total_chars),
+        );
+    }
+
+    if s.len() <= max_bytes {
+        return s.to_string();
+    }
+
+    let total_bytes = s.len();
+    let (left_budget, right_budget) = split_budget(max_bytes);
+    let (removed_chars, left, right) = split_string(s, left_budget, right_budget);
+    let marker = format_truncation_marker(
+        use_tokens,
+        removed_units(
+            use_tokens,
+            total_bytes.saturating_sub(max_bytes),
+            removed_chars,
+        ),
+    );
+
+    assemble_truncated_output(left, right, &marker)
 }
 
 pub fn approx_token_count(text: &str) -> usize {
@@ -145,14 +124,217 @@ fn split_budget(budget: usize) -> (usize, usize) {
     (left, budget - left)
 }
 
-#[cfg(test)]
-#[path = "truncate_test_support.rs"]
-mod test_support;
+fn format_truncation_marker(use_tokens: bool, removed_count: u64) -> String {
+    if use_tokens {
+        format!("…{removed_count} tokens truncated…")
+    } else {
+        format!("…{removed_count} chars truncated…")
+    }
+}
+
+fn removed_units(use_tokens: bool, removed_bytes: usize, removed_chars: usize) -> u64 {
+    if use_tokens {
+        approx_tokens_from_byte_count(removed_bytes)
+    } else {
+        u64::try_from(removed_chars).unwrap_or(u64::MAX)
+    }
+}
+
+fn assemble_truncated_output(prefix: &str, suffix: &str, marker: &str) -> String {
+    let mut out = String::with_capacity(prefix.len() + marker.len() + suffix.len() + 1);
+    out.push_str(prefix);
+    out.push_str(marker);
+    out.push_str(suffix);
+    out
+}
 
 #[cfg(test)]
-#[path = "truncate_tests.rs"]
-mod tests;
+mod tests {
+    use super::approx_bytes_for_tokens;
+    use super::approx_token_count;
+    use super::split_string;
+    use super::truncate_middle_chars;
+    use super::truncate_middle_with_token_budget;
+    use pretty_assertions::assert_eq;
 
-#[cfg(test)]
-#[path = "truncate_split_tests.rs"]
-mod split_tests;
+    #[test]
+    fn split_string_works() {
+        assert_eq!(split_string("hello world", 5, 5), (1, "hello", "world"));
+        assert_eq!(split_string("abc", 0, 0), (3, "", ""));
+    }
+
+    #[test]
+    fn split_string_handles_empty_string() {
+        assert_eq!(split_string("", 4, 4), (0, "", ""));
+    }
+
+    #[test]
+    fn split_string_only_keeps_prefix_when_tail_budget_is_zero() {
+        assert_eq!(split_string("abcdef", 3, 0), (3, "abc", ""));
+    }
+
+    #[test]
+    fn split_string_only_keeps_suffix_when_prefix_budget_is_zero() {
+        assert_eq!(split_string("abcdef", 0, 3), (3, "", "def"));
+    }
+
+    #[test]
+    fn split_string_handles_overlapping_budgets_without_removal() {
+        assert_eq!(split_string("abcdef", 4, 4), (0, "abcd", "ef"));
+    }
+
+    #[test]
+    fn split_string_respects_utf8_boundaries() {
+        assert_eq!(split_string("😀abc😀", 5, 5), (1, "😀a", "c😀"));
+
+        assert_eq!(split_string("😀😀😀😀😀", 1, 1), (5, "", ""));
+        assert_eq!(split_string("😀😀😀😀😀", 7, 7), (3, "😀", "😀"));
+        assert_eq!(split_string("😀😀😀😀😀", 8, 8), (1, "😀😀", "😀😀"));
+    }
+
+    #[test]
+    fn truncate_bytes_less_than_placeholder_returns_placeholder() {
+        let content = "example output";
+
+        assert_eq!(
+            "Total output lines: 1\n\n…13 chars truncated…t",
+            formatted_truncate_text(content, TruncationPolicy::Bytes(1)),
+        );
+    }
+
+    #[test]
+    fn truncate_tokens_less_than_placeholder_returns_placeholder() {
+        let content = "example output";
+
+        assert_eq!(
+            "Total output lines: 1\n\nex…3 tokens truncated…ut",
+            formatted_truncate_text(content, TruncationPolicy::Tokens(1)),
+        );
+    }
+
+    #[test]
+    fn truncate_tokens_under_limit_returns_original() {
+        let content = "example output";
+
+        assert_eq!(
+            content,
+            formatted_truncate_text(content, TruncationPolicy::Tokens(10)),
+        );
+    }
+
+    #[test]
+    fn truncate_bytes_under_limit_returns_original() {
+        let content = "example output";
+
+        assert_eq!(
+            content,
+            formatted_truncate_text(content, TruncationPolicy::Bytes(20)),
+        );
+    }
+
+    #[test]
+    fn truncate_tokens_over_limit_returns_truncated() {
+        let content = "this is an example of a long output that should be truncated";
+
+        assert_eq!(
+            "Total output lines: 1\n\nthis is an…10 tokens truncated… truncated",
+            formatted_truncate_text(content, TruncationPolicy::Tokens(5)),
+        );
+    }
+
+    #[test]
+    fn truncate_bytes_over_limit_returns_truncated() {
+        let content = "this is an example of a long output that should be truncated";
+
+        assert_eq!(
+            "Total output lines: 1\n\nthis is an exam…30 chars truncated…ld be truncated",
+            formatted_truncate_text(content, TruncationPolicy::Bytes(30)),
+        );
+    }
+
+    #[test]
+    fn truncate_bytes_reports_original_line_count_when_truncated() {
+        let content =
+            "this is an example of a long output that should be truncated\nalso some other line";
+
+        assert_eq!(
+            "Total output lines: 2\n\nthis is an exam…51 chars truncated…some other line",
+            formatted_truncate_text(content, TruncationPolicy::Bytes(30)),
+        );
+    }
+
+    #[test]
+    fn truncate_tokens_reports_original_line_count_when_truncated() {
+        let content =
+            "this is an example of a long output that should be truncated\nalso some other line";
+
+        assert_eq!(
+            "Total output lines: 2\n\nthis is an example o…11 tokens truncated…also some other line",
+            formatted_truncate_text(content, TruncationPolicy::Tokens(10)),
+        );
+    }
+
+    #[test]
+    fn truncate_with_token_budget_returns_original_when_under_limit() {
+        let s = "short output";
+        let limit = 100;
+        let (out, original) = truncate_middle_with_token_budget(s, limit);
+        assert_eq!(out, s);
+        assert_eq!(original, None);
+    }
+
+    #[test]
+    fn truncate_with_token_budget_reports_truncation_at_zero_limit() {
+        let s = "abcdef";
+        let (out, original) = truncate_middle_with_token_budget(s, 0);
+        assert_eq!(out, "…2 tokens truncated…");
+        assert_eq!(original, Some(2));
+    }
+
+    #[test]
+    fn truncate_middle_tokens_handles_utf8_content() {
+        let s = "😀😀😀😀😀😀😀😀😀😀\nsecond line with text\n";
+        let (out, tokens) = truncate_middle_with_token_budget(s, 8);
+        assert_eq!(out, "😀😀😀😀…8 tokens truncated… line with text\n");
+        assert_eq!(tokens, Some(16));
+    }
+
+    #[test]
+    fn truncate_middle_bytes_handles_utf8_content() {
+        let s = "😀😀😀😀😀😀😀😀😀😀\nsecond line with text\n";
+        let out = truncate_middle_chars(s, 20);
+        assert_eq!(out, "😀😀…21 chars truncated…with text\n");
+    }
+
+    #[derive(Clone, Copy)]
+    enum TruncationPolicy {
+        Bytes(usize),
+        Tokens(usize),
+    }
+
+    fn formatted_truncate_text(content: &str, policy: TruncationPolicy) -> String {
+        if content.len() <= byte_budget(policy) {
+            return content.to_string();
+        }
+
+        let total_lines = content.lines().count();
+        let result = truncate_text(content, policy);
+        format!("Total output lines: {total_lines}\n\n{result}")
+    }
+
+    fn truncate_text(content: &str, policy: TruncationPolicy) -> String {
+        match policy {
+            TruncationPolicy::Bytes(bytes) => truncate_middle_chars(content, bytes),
+            TruncationPolicy::Tokens(tokens) => {
+                truncate_middle_with_token_budget(content, tokens).0
+            }
+        }
+    }
+
+    fn byte_budget(policy: TruncationPolicy) -> usize {
+        match policy {
+            TruncationPolicy::Bytes(bytes) => bytes,
+            TruncationPolicy::Tokens(tokens) => approx_bytes_for_tokens(tokens),
+        }
+    }
+}
