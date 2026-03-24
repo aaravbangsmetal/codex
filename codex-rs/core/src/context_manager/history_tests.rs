@@ -1,5 +1,4 @@
-#![allow(dead_code)]
-#![allow(unused_imports)]
+#![allow(warnings)]
 
 use super::*;
 use base64::Engine;
